@@ -4,7 +4,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
-from wiley_harness_agent.chat import ChatStreamEvent
+from wiley_harness_agent.chat import ChatStreamEvent, ChatUsage
 
 
 class ChatBackend(Protocol):
@@ -49,6 +49,11 @@ class ChatApp(App[None]):
         margin: 0 1;
         color: $text-muted;
     }
+
+    #message-list > Markdown.usage {
+        color: #7A7A7A;
+        margin: 0 0 1 0;
+    }
     """
 
     TITLE = "Wiley Harness Agent"
@@ -89,8 +94,14 @@ class ChatApp(App[None]):
     def _message_list(self) -> Vertical:
         return self.query_one("#message-list", Vertical)
 
-    async def _mount_markdown(self, content: str, *, reasoning: bool = False) -> Markdown:
-        classes = "reasoning" if reasoning else ""
+    async def _mount_markdown(
+        self,
+        content: str,
+        *,
+        reasoning: bool = False,
+        classes: str = "",
+    ) -> Markdown:
+        classes = classes or ("reasoning" if reasoning else "")
         widget = Markdown(content, classes=classes)
         await self._message_list.mount(widget)
         self._scroll_to_bottom()
@@ -147,9 +158,35 @@ class ChatApp(App[None]):
                         answer_widget,
                         f"### 助手\n\n{answer_text}",
                     )
+                elif event.kind == "usage":
+                    if event.usage and event.total_usage:
+                        await self._mount_markdown(
+                            self._format_usage(event.usage, event.total_usage),
+                            classes="usage",
+                        )
+                        self._status.update(
+                            f"累计上下文：{event.total_usage.context_tokens:,} tokens"
+                        )
         except Exception as exc:
             await self._mount_markdown(f"### 错误\n\n`{exc}`")
         finally:
             self._prompt.disabled = False
             self._status.update("就绪")
             self._prompt.focus()
+
+    @staticmethod
+    def _format_usage(usage: ChatUsage, total: ChatUsage) -> str:
+        return (
+            "`本轮` "
+            f"输入 {usage.input_tokens:,} · "
+            f"输出 {usage.output_tokens:,} · "
+            f"缓存 {usage.cache_tokens:,} "
+            f"（读 {usage.cache_read_input_tokens:,} / "
+            f"写 {usage.cache_creation_input_tokens:,}）· "
+            f"上下文 {usage.context_tokens:,} tokens\n\n"
+            "`累计` "
+            f"输入 {total.input_tokens:,} · "
+            f"输出 {total.output_tokens:,} · "
+            f"缓存 {total.cache_tokens:,} · "
+            f"上下文 {total.context_tokens:,} tokens"
+        )
