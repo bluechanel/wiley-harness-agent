@@ -1,5 +1,6 @@
-[openai]
+[anthropic]
 api_key = "your-api-key"
-base_url = "https://api.openai.com/v1"
-model = "gpt-4.1-mini"
-
+base_url = "https://api.anthropic.com"
+model = "claude-sonnet-4-5"
+max_tokens = 8192
+thinking_budget_tokens = 4096

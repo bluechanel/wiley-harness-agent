@@ -11,7 +11,7 @@
 
 ## 配置
 
-复制配置模板并填写 API Key、Base URL 和模型名称：
+复制配置模板并填写 Anthropic API Key、Base URL 和模型名称：
 
 ```bash
 cp config.example.toml config.toml
@@ -31,4 +31,4 @@ uv run python main.py
 uv run wiley-harness-agent
 ```
 
-程序会在当前进程内保存消息历史，以支持多轮对话。消息列表固定跟随底部，用户输入和 AI 输出均支持 Markdown 渲染。模型内容采用流式响应：思考和正式回答的片段一旦返回就会立即更新界面；若服务返回 `reasoning_content` 等思考字段，思考区域会使用较淡颜色展示。输入 `exit` 或 `quit` 结束。
+程序会在当前进程内保存消息历史，以支持多轮对话。消息列表固定跟随底部，用户输入和 AI 输出均支持 Markdown 渲染。Anthropic Messages API 采用流式响应：thinking 和 text 片段一旦返回就会立即更新界面，思考区域使用较淡颜色展示。将 `thinking_budget_tokens` 设为 `0` 可以关闭扩展思考。输入 `exit` 或 `quit` 结束。

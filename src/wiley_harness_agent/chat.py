@@ -2,9 +2,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal
 
-from openai import OpenAI
+import anthropic
 
-from wiley_harness_agent.config import OpenAIConfig
+from wiley_harness_agent.config import AnthropicConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,11 +33,16 @@ def _extract_delta_text(delta: object, fields: tuple[str, ...]) -> str | None:
 
 
 class ChatService:
-    """Manage OpenAI requests and in-memory conversation history."""
+    """Manage Anthropic requests and in-memory conversation history."""
 
-    def __init__(self, config: OpenAIConfig) -> None:
-        self._client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+    def __init__(self, config: AnthropicConfig) -> None:
+        self._client = anthropic.Anthropic(
+            api_key=config.api_key,
+            base_url=config.base_url,
+        )
         self._model = config.model
+        self._max_tokens = config.max_tokens
+        self._thinking_budget_tokens = config.thinking_budget_tokens
         self._messages: list[dict[str, str]] = []
 
     async def send(self, user_input: str) -> ChatResult:
@@ -56,7 +61,7 @@ class ChatService:
         )
 
     async def stream(self, user_input: str) -> AsyncIterator[ChatStreamEvent]:
-        """Yield reasoning and answer text as it arrives from the provider."""
+        """Yield thinking and answer text as it arrives from Anthropic."""
         self._messages.append({"role": "user", "content": user_input})
         queue: asyncio.Queue[ChatStreamEvent | _StreamError] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -66,24 +71,31 @@ class ChatService:
 
         def produce() -> None:
             try:
-                response_stream = self._client.chat.completions.create(
-                    model=self._model,
-                    messages=self._messages,
-                    stream=True,
-                )
-                for chunk in response_stream:
-                    if not chunk.choices:
+                request: dict[str, object] = {
+                    "model": self._model,
+                    "messages": self._messages,
+                    "max_tokens": self._max_tokens,
+                    "stream": True,
+                }
+                if self._thinking_budget_tokens:
+                    request["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": self._thinking_budget_tokens,
+                    }
+
+                response_stream = self._client.messages.create(**request)
+                for event in response_stream:
+                    if getattr(event, "type", None) != "content_block_delta":
                         continue
-                    delta = chunk.choices[0].delta
-                    reasoning = _extract_delta_text(
-                        delta,
-                        ("reasoning_content", "reasoning", "thinking"),
-                    )
-                    if reasoning:
-                        emit(ChatStreamEvent(kind="reasoning", text=reasoning))
-                    answer = _extract_delta_text(delta, ("content",))
-                    if answer:
-                        emit(ChatStreamEvent(kind="answer", text=answer))
+                    delta = event.delta
+                    if getattr(delta, "type", None) == "thinking_delta":
+                        thinking = _extract_delta_text(delta, ("thinking",))
+                        if thinking:
+                            emit(ChatStreamEvent(kind="reasoning", text=thinking))
+                    elif getattr(delta, "type", None) == "text_delta":
+                        answer = _extract_delta_text(delta, ("text",))
+                        if answer:
+                            emit(ChatStreamEvent(kind="answer", text=answer))
                 emit(ChatStreamEvent(kind="done"))
             except BaseException as exc:
                 emit(_StreamError(exc))
