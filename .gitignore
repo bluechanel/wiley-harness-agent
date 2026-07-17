@@ -11,4 +11,4 @@ dist/
 build/
 .DS_Store
 config.toml
-
+sessions/

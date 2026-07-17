@@ -1,10 +1,13 @@
+import json
 from typing import AsyncIterator, Protocol
 
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
-from wiley_harness_agent.chat import ChatStreamEvent, ChatUsage
+from wiley_harness_agent.chat import ChatStreamEvent
+from wiley_harness_agent.session import SessionRecord
+from wiley_harness_agent.usage import ChatUsage
 
 
 class ChatBackend(Protocol):
@@ -59,9 +62,17 @@ class ChatApp(App[None]):
     TITLE = "Wiley Harness Agent"
     SUB_TITLE = "Markdown chat · 输入 exit 或 quit 退出"
 
-    def __init__(self, chat: ChatBackend) -> None:
+    def __init__(
+        self,
+        chat: ChatBackend,
+        *,
+        session_id: str = "",
+        history: tuple[SessionRecord, ...] = (),
+    ) -> None:
         super().__init__()
         self.chat = chat
+        self.session_id = session_id
+        self.history = history
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -77,10 +88,51 @@ class ChatApp(App[None]):
 
     def on_mount(self) -> None:
         self._prompt.focus()
+        if self.session_id:
+            self.sub_title = f"Session {self.session_id}"
         self.call_after_refresh(
-            self._mount_markdown,
-            "### 助手\n\n你好！我是你的 AI 助手。直接输入消息开始对话。"
+            self._render_history,
         )
+
+    async def _render_history(self) -> None:
+        if not self.history:
+            await self._mount_markdown(
+                "### 助手\n\n你好！我是你的 AI 助手。直接输入消息开始对话。"
+            )
+            return
+
+        for record in self.history:
+            content = self._record_content(record)
+            if record.role == "user":
+                await self._mount_markdown(f"### 你\n\n{content}")
+            elif record.role == "assistant" and record.kind == "thinking":
+                await self._mount_markdown(
+                    f"### 思考过程\n\n{content}",
+                    reasoning=True,
+                )
+            elif record.role == "assistant" and record.kind == "answer":
+                await self._mount_markdown(f"### 助手\n\n{content}")
+                if record.usage and record.total_usage:
+                    await self._mount_markdown(
+                        self._format_usage(record.usage, record.total_usage),
+                        classes="usage",
+                    )
+            elif record.role == "assistant" and record.kind == "error":
+                await self._mount_markdown(f"### 错误\n\n`{content}`")
+            elif record.role == "tool_call":
+                tool_name = (record.metadata or {}).get("tool_name", "tool")
+                await self._mount_markdown(
+                    f"### 工具调用：{tool_name}\n\n{content}",
+                    classes="usage",
+                )
+            elif record.role == "tool_output":
+                tool_name = (record.metadata or {}).get("tool_name", "tool")
+                await self._mount_markdown(
+                    f"### 工具输出：{tool_name}\n\n{content}",
+                    classes="usage",
+                )
+
+        self._scroll_to_bottom()
 
     @property
     def _prompt(self) -> Input:
@@ -115,6 +167,16 @@ class ChatApp(App[None]):
         self.query_one("#conversation", VerticalScroll).scroll_end(
             animate=False,
             immediate=True,
+        )
+
+    @staticmethod
+    def _record_content(record: SessionRecord) -> str:
+        if isinstance(record.content, str):
+            return record.content
+        return (
+            "```json\n"
+            + json.dumps(record.content, ensure_ascii=False, indent=2)
+            + "\n```"
         )
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:

@@ -1,15 +1,48 @@
+import argparse
+from collections.abc import Sequence
+
 from wiley_harness_agent.chat import ChatService
 from wiley_harness_agent.config import ConfigError, load_config
+from wiley_harness_agent.conversation import ConversationService
+from wiley_harness_agent.session import SessionError, SessionStore
 from wiley_harness_agent.ui import ChatApp
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     """Build and start the application."""
+    parser = argparse.ArgumentParser(description="Wiley Harness Agent")
+    parser.add_argument(
+        "session_id",
+        nargs="?",
+        help="要继续的会话 UUID；省略时创建新会话",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        session = SessionStore(args.session_id)
+    except SessionError as exc:
+        print(f"启动失败：{exc}")
+        return
+
     try:
         config = load_config()
     except ConfigError as exc:
         print(f"启动失败：{exc}")
+        print(f"session_id: {session.session_id}")
         return
 
-    ChatApp(ChatService(config)).run()
+    chat = ChatService(
+        config,
+        messages=session.conversation_messages(),
+        total_usage=session.total_usage,
+    )
+    conversation = ConversationService(chat, session)
 
+    try:
+        ChatApp(
+            conversation,
+            session_id=session.session_id,
+            history=session.records,
+        ).run()
+    finally:
+        print(f"resume agent: uv run main.py {session.session_id}")

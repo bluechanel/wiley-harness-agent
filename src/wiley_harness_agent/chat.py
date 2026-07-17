@@ -5,6 +5,7 @@ from typing import AsyncIterator, Literal
 import anthropic
 
 from wiley_harness_agent.config import AnthropicConfig
+from wiley_harness_agent.usage import ChatUsage
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,42 +13,6 @@ class ChatResult:
     answer: str
     reasoning: str | None = None
     usage: "ChatUsage | None" = None
-
-
-@dataclass(frozen=True, slots=True)
-class ChatUsage:
-    """Token usage for one request or an accumulated conversation."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
-
-    @property
-    def cache_tokens(self) -> int:
-        return self.cache_creation_input_tokens + self.cache_read_input_tokens
-
-    @property
-    def context_tokens(self) -> int:
-        return (
-            self.input_tokens
-            + self.output_tokens
-            + self.cache_creation_input_tokens
-            + self.cache_read_input_tokens
-        )
-
-    def add(self, other: "ChatUsage") -> "ChatUsage":
-        return ChatUsage(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cache_creation_input_tokens=(
-                self.cache_creation_input_tokens
-                + other.cache_creation_input_tokens
-            ),
-            cache_read_input_tokens=(
-                self.cache_read_input_tokens + other.cache_read_input_tokens
-            ),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +39,13 @@ def _extract_delta_text(delta: object, fields: tuple[str, ...]) -> str | None:
 class ChatService:
     """Manage Anthropic requests and in-memory conversation history."""
 
-    def __init__(self, config: AnthropicConfig) -> None:
+    def __init__(
+        self,
+        config: AnthropicConfig,
+        *,
+        messages: list[dict[str, str]] | None = None,
+        total_usage: ChatUsage | None = None,
+    ) -> None:
         self._client = anthropic.Anthropic(
             api_key=config.api_key,
             base_url=config.base_url,
@@ -82,8 +53,8 @@ class ChatService:
         self._model = config.model
         self._max_tokens = config.max_tokens
         self._thinking_budget_tokens = config.thinking_budget_tokens
-        self._messages: list[dict[str, str]] = []
-        self._total_usage = ChatUsage()
+        self._messages = list(messages or [])
+        self._total_usage = total_usage or ChatUsage()
 
     async def send(self, user_input: str) -> ChatResult:
         answer_parts: list[str] = []
