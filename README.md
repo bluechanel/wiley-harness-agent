@@ -33,6 +33,8 @@ uv run wiley-harness-agent
 
 程序会在当前进程内保存消息历史，以支持多轮对话。消息列表固定跟随底部，用户输入和 AI 输出均支持 Markdown 渲染。Anthropic Messages API 采用流式响应：thinking 和 text 片段一旦返回就会立即更新界面，思考区域使用较淡颜色展示。将 `thinking_budget_tokens` 设为 `0` 可以关闭扩展思考。输入 `exit` 或 `quit` 结束。
 
+模型请求通过项目内的 `provider` 包发送，不依赖 Anthropic SDK。API Key、Base URL 和模型参数统一从 `config.toml` 读取，再传入 provider。`AnthropicProvider` 使用 aiohttp 异步调用 Anthropic Messages API，在 `stream_request` 内解析 SSE，并返回统一的 `TextDelta`、`ReasoningDelta`、`ToolCall`、`ToolResult`、`ErrorEvent`、`UsageEvent` 和 `DoneEvent`。`UsageEvent` 使用 provider 层独立的 `ProviderUsage`，进入 TUI 前才转换为 `ChatUsage`；新增其他 LLM API 时，应继承 `BaseProvider` 并实现相同的流式请求接口。
+
 每轮回答结束后，消息下方会显示输入、输出、缓存读写、上下文数量，以及跨多轮累计的统计。
 
 ## 会话记录
