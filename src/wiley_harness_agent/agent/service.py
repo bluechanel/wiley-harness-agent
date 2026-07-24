@@ -33,10 +33,15 @@ class ChatResult:
 
 @dataclass(frozen=True, slots=True)
 class ChatStreamEvent:
-    kind: Literal["reasoning", "answer", "usage", "done"]
+    kind: Literal["reasoning", "answer", "tool_call", "tool_output", "usage", "done"]
     text: str = ""
     usage: ChatUsage | None = None
     total_usage: ChatUsage | None = None
+    context_tokens: int = 0
+    tool_name: str = ""
+    tool_call_id: str = ""
+    tool_arguments: Mapping[str, Any] | None = None
+    tool_is_error: bool = False
 
 
 class AgentService:
@@ -196,6 +201,12 @@ class AgentService:
                         block["input"] = arguments
                         tool_name = str(block.get("name", ""))
                         tool_call_id = str(block.get("id", ""))
+                        yield ChatStreamEvent(
+                            kind="tool_call",
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            tool_arguments=arguments,
+                        )
                         if self._debug is not None:
                             self._debug.record_tool_call(
                                 turn=turn,
@@ -215,6 +226,13 @@ class AgentService:
                                 tool_call_id=tool_call_id,
                                 output=result,
                             )
+                        yield ChatStreamEvent(
+                            kind="tool_output",
+                            text=result,
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            tool_is_error=is_error,
+                        )
                         tool_result: dict[str, object] = {
                             "type": "tool_result",
                             "tool_use_id": tool_call_id,
@@ -226,10 +244,13 @@ class AgentService:
                     self._messages.append({"role": "user", "content": results})
                 chat_usage = _to_chat_usage(accumulated_usage)
                 self._total_usage = self._total_usage.add(chat_usage)
+                # `usage` holds the final round only; summing its components
+                # gives the live context size, unlike the per-turn accumulation.
                 yield ChatStreamEvent(
                     kind="usage",
                     usage=chat_usage,
                     total_usage=self._total_usage,
+                    context_tokens=_to_chat_usage(usage).context_tokens,
                 )
                 self._messages.append(
                     {"role": "assistant", "content": "".join(answer_parts)}

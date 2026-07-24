@@ -28,6 +28,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             agent,
             session_id=agent.session_id,
             history=agent.history,
+            total_usage=agent.total_usage,
+            context_tokens=agent.last_context_tokens,
         ).run()
     finally:
         print(f"resume agent: uv run main.py {agent.session_id}")

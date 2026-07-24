@@ -90,6 +90,23 @@ class SessionStore:
                 total = total.add(record.usage or ChatUsage())
         return total
 
+    @property
+    def last_context_tokens(self) -> int:
+        """Context size after the latest completed turn.
+
+        旧记录没有 metadata.context_tokens 时退回该轮 usage 的分量和
+        （单轮请求下两者一致，含工具的多轮请求会偏大）。
+        """
+        for record in reversed(self._records):
+            if record.role == "assistant" and record.kind == "answer":
+                value = (record.metadata or {}).get("context_tokens")
+                if isinstance(value, int) and value >= 0:
+                    return value
+                if record.usage:
+                    return record.usage.context_tokens
+                return 0
+        return 0
+
     def conversation_messages(self) -> list[dict[str, str]]:
         """Restore only completed user/assistant turns for the Anthropic API."""
         messages: list[dict[str, str]] = []
@@ -124,6 +141,7 @@ class SessionStore:
         kind: Literal["thinking", "answer", "error"],
         usage: ChatUsage,
         total_usage: ChatUsage,
+        metadata: Mapping[str, Any] | None = None,
     ) -> SessionRecord:
         return self._append(
             role="assistant",
@@ -131,6 +149,7 @@ class SessionStore:
             kind=kind,
             usage=usage,
             total_usage=total_usage,
+            metadata=metadata,
         )
 
     def append_tool_call(
@@ -153,12 +172,19 @@ class SessionStore:
         tool_name: str,
         tool_call_id: str,
         output: Any,
+        is_error: bool = False,
     ) -> SessionRecord:
+        metadata: dict[str, Any] = {
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+        }
+        if is_error:
+            metadata["is_error"] = True
         return self._append(
             role="tool_output",
             content=output,
             kind="tool_output",
-            metadata={"tool_name": tool_name, "tool_call_id": tool_call_id},
+            metadata=metadata,
         )
 
     def _append(

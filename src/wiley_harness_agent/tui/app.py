@@ -3,10 +3,10 @@
 from typing import AsyncIterator, Protocol
 
 from textual.app import App, ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
-from wiley_harness_agent.agent import ChatStreamEvent, SessionRecord
+from wiley_harness_agent.agent import ChatStreamEvent, ChatUsage, SessionRecord
 import wiley_harness_agent.tui.render as render
 
 
@@ -42,20 +42,29 @@ class ChatApp(App[None]):
         color: #9A9A9A;
     }
 
+    #message-list > Markdown.tool {
+        color: #8A8A8A;
+        border-left: thick #4A4A4A;
+    }
+
     #prompt {
         margin: 1 0 0 0;
         border: round $accent;
     }
 
-    #status {
+    #status-bar {
         height: 1;
         margin: 0 1;
+    }
+
+    #status {
+        width: 1fr;
         color: $text-muted;
     }
 
-    #message-list > Markdown.usage {
-        color: #7A7A7A;
-        margin: 0 0 1 0;
+    #usage {
+        width: auto;
+        color: $text-muted;
     }
     """
 
@@ -68,11 +77,15 @@ class ChatApp(App[None]):
         *,
         session_id: str = "",
         history: tuple[SessionRecord, ...] = (),
+        total_usage: ChatUsage = ChatUsage(),
+        context_tokens: int = 0,
     ) -> None:
         super().__init__()
         self.chat = chat
         self.session_id = session_id
         self.history = history
+        self.total_usage = total_usage
+        self.context_tokens = context_tokens
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -83,7 +96,12 @@ class ChatApp(App[None]):
                 placeholder="输入消息（支持 Markdown），按 Enter 发送…",
                 id="prompt",
             )
-            yield Static("就绪", id="status")
+            with Horizontal(id="status-bar"):
+                yield Static("就绪", id="status")
+                yield Static(
+                    render.usage_bar_text(self.total_usage, self.context_tokens),
+                    id="usage",
+                )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -112,6 +130,10 @@ class ChatApp(App[None]):
     @property
     def _status(self) -> Static:
         return self.query_one("#status", Static)
+
+    @property
+    def _usage(self) -> Static:
+        return self.query_one("#usage", Static)
 
     @property
     def _message_list(self) -> Vertical:
@@ -179,14 +201,34 @@ class ChatApp(App[None]):
                         answer_widget,
                         render.answer_markdown(answer_text),
                     )
+                elif event.kind == "tool_call":
+                    # 后续轮次的思考/回答另起新块，保持与工具块的时间顺序。
+                    reasoning_widget = None
+                    answer_widget = None
+                    reasoning_text = ""
+                    answer_text = ""
+                    self._status.update(f"执行工具：{event.tool_name}…")
+                    await self._mount_markdown(
+                        render.tool_call_markdown(
+                            event.tool_name, event.tool_arguments
+                        ),
+                        classes="tool",
+                    )
+                elif event.kind == "tool_output":
+                    await self._mount_markdown(
+                        render.tool_output_markdown(
+                            event.tool_name,
+                            event.text,
+                            is_error=event.tool_is_error,
+                        ),
+                        classes="tool",
+                    )
                 elif event.kind == "usage":
-                    if event.usage and event.total_usage:
-                        await self._mount_markdown(
-                            render.usage_markdown(event.usage, event.total_usage),
-                            classes="usage",
-                        )
-                        self._status.update(
-                            f"累计上下文：{event.total_usage.context_tokens:,} tokens"
+                    if event.total_usage:
+                        self._usage.update(
+                            render.usage_bar_text(
+                                event.total_usage, event.context_tokens
+                            )
                         )
         except Exception as exc:
             await self._mount_markdown(render.error_markdown(exc))

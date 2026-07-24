@@ -52,6 +52,7 @@ def test_agent_stream_accumulates_new_content_blocks() -> None:
     assert events[2].usage is not None
     assert events[2].usage.input_tokens == 3
     assert events[2].usage.output_tokens == 2
+    assert events[2].context_tokens == 5
 
 
 def test_agent_service_runs_registered_tools() -> None:
@@ -98,7 +99,27 @@ def test_agent_service_runs_registered_tools() -> None:
     events = asyncio.run(collect_events())
 
     assert executed == [{"value": "hi"}]
-    assert [event.kind for event in events] == ["answer", "usage", "done"]
+    assert [event.kind for event in events] == [
+        "tool_call",
+        "tool_output",
+        "answer",
+        "usage",
+        "done",
+    ]
+    tool_call_event, tool_output_event = events[0], events[1]
+    assert tool_call_event.tool_name == "echo"
+    assert tool_call_event.tool_call_id == "call-1"
+    assert tool_call_event.tool_arguments == {"value": "hi"}
+    assert tool_output_event.tool_name == "echo"
+    assert tool_output_event.tool_call_id == "call-1"
+    assert tool_output_event.text == "echo:hi"
+    assert tool_output_event.tool_is_error is False
+    usage_event = events[3]
+    assert usage_event.usage is not None
+    assert usage_event.usage.input_tokens == 1
+    assert usage_event.usage.output_tokens == 1
+    # 上下文取最后一轮请求（仅 output_tokens=1），而非整轮累加值。
+    assert usage_event.context_tokens == 1
     options = requests[0]["options"]
     assert options["model"] == "model"
     assert options["max_tokens"] == 8192
@@ -139,12 +160,17 @@ def test_agent_service_reports_unknown_tool_as_error_result() -> None:
     async def collect_events():
         return [event async for event in agent.stream("hello")]
 
-    asyncio.run(collect_events())
+    events = asyncio.run(collect_events())
 
     tool_result = requests[1][-1]["content"][0]
     assert tool_result["tool_use_id"] == "call-1"
     assert "unknown tool" in tool_result["content"]
     assert tool_result["is_error"] is True
+    tool_output_event = next(
+        event for event in events if event.kind == "tool_output"
+    )
+    assert tool_output_event.tool_is_error is True
+    assert "unknown tool" in tool_output_event.text
 
 
 def test_agent_service_composes_system_prompt_from_providers() -> None:

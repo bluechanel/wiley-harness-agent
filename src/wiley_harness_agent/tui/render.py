@@ -1,6 +1,7 @@
 """Parse agent-layer records and usage into Markdown views for display."""
 
 import json
+import re
 from dataclasses import dataclass
 
 from wiley_harness_agent.agent import ChatUsage, SessionRecord
@@ -15,6 +16,9 @@ class MessageView:
 
 
 WELCOME_VIEW = MessageView("### 助手\n\n你好！我是你的 AI 助手。直接输入消息开始对话。")
+
+_TOOL_PAYLOAD_MAX_LINES = 30
+_TOOL_PAYLOAD_MAX_CHARS = 2000
 
 
 def user_markdown(content: str) -> str:
@@ -33,21 +37,25 @@ def error_markdown(error: object) -> str:
     return f"### 错误\n\n`{error}`"
 
 
-def usage_markdown(usage: ChatUsage, total: ChatUsage) -> str:
+def usage_bar_text(total: ChatUsage, context_tokens: int) -> str:
+    """One-line usage summary: accumulated totals plus the live context size."""
     return (
-        "`本轮` "
-        f"输入 {usage.input_tokens:,} · "
-        f"输出 {usage.output_tokens:,} · "
-        f"缓存 {usage.cache_tokens:,} "
-        f"（读 {usage.cache_read_input_tokens:,} / "
-        f"写 {usage.cache_creation_input_tokens:,}）· "
-        f"上下文 {usage.context_tokens:,} tokens\n\n"
-        "`累计` "
         f"输入 {total.input_tokens:,} · "
         f"输出 {total.output_tokens:,} · "
         f"缓存 {total.cache_tokens:,} · "
-        f"上下文 {total.context_tokens:,} tokens"
+        f"上下文 {context_tokens:,} tokens"
     )
+
+
+def tool_call_markdown(tool_name: str, arguments: object) -> str:
+    return f"### 工具调用：{tool_name}\n\n{_payload_markdown(arguments)}"
+
+
+def tool_output_markdown(
+    tool_name: str, output: object, *, is_error: bool = False
+) -> str:
+    heading = "工具输出（错误）" if is_error else "工具输出"
+    return f"### {heading}：{tool_name}\n\n{_payload_markdown(output)}"
 
 
 def render_record(record: SessionRecord) -> list[MessageView]:
@@ -58,26 +66,27 @@ def render_record(record: SessionRecord) -> list[MessageView]:
     if record.role == "assistant" and record.kind == "thinking":
         return [MessageView(reasoning_markdown(content), classes="reasoning")]
     if record.role == "assistant" and record.kind == "answer":
-        views = [MessageView(answer_markdown(content))]
-        if record.usage and record.total_usage:
-            views.append(
-                MessageView(
-                    usage_markdown(record.usage, record.total_usage),
-                    classes="usage",
-                )
-            )
-        return views
+        return [MessageView(answer_markdown(content))]
     if record.role == "assistant" and record.kind == "error":
         return [MessageView(error_markdown(content))]
     if record.role == "tool_call":
-        tool_name = (record.metadata or {}).get("tool_name", "tool")
+        tool_name = str((record.metadata or {}).get("tool_name", "tool"))
         return [
-            MessageView(f"### 工具调用：{tool_name}\n\n{content}", classes="usage")
+            MessageView(
+                tool_call_markdown(tool_name, record.content), classes="tool"
+            )
         ]
     if record.role == "tool_output":
-        tool_name = (record.metadata or {}).get("tool_name", "tool")
+        metadata = record.metadata or {}
         return [
-            MessageView(f"### 工具输出：{tool_name}\n\n{content}", classes="usage")
+            MessageView(
+                tool_output_markdown(
+                    str(metadata.get("tool_name", "tool")),
+                    record.content,
+                    is_error=bool(metadata.get("is_error")),
+                ),
+                classes="tool",
+            )
         ]
     return []
 
@@ -90,3 +99,33 @@ def _record_content(record: SessionRecord) -> str:
         + json.dumps(record.content, ensure_ascii=False, indent=2)
         + "\n```"
     )
+
+
+def _payload_markdown(value: object) -> str:
+    """Fence a tool payload for display, clipping oversized content."""
+    if isinstance(value, str):
+        text, lang = value, ""
+    else:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+        lang = "json"
+    if not text.strip():
+        return "*（空）*"
+    clipped, note = _clip(text)
+    return _fenced(clipped, lang) + note
+
+
+def _clip(text: str) -> tuple[str, str]:
+    """Clip for display only; session records keep the full payload."""
+    lines = text.splitlines()
+    if len(lines) <= _TOOL_PAYLOAD_MAX_LINES and len(text) <= _TOOL_PAYLOAD_MAX_CHARS:
+        return text, ""
+    clipped = "\n".join(lines[:_TOOL_PAYLOAD_MAX_LINES])
+    clipped = clipped[:_TOOL_PAYLOAD_MAX_CHARS].rstrip()
+    note = f"\n\n*（已截断：完整内容共 {len(lines)} 行 / {len(text):,} 字符）*"
+    return clipped, note
+
+
+def _fenced(text: str, lang: str = "") -> str:
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{lang}\n{text}\n{fence}"
