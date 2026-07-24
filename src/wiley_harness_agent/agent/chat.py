@@ -3,8 +3,8 @@ import json
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal
 
-from wiley_harness_agent.config import AnthropicConfig
-from wiley_harness_agent.provider import (
+from wiley_harness_agent.agent.config import AnthropicConfig
+from wiley_harness_agent.agent.provider import (
     AnthropicProvider,
     DoneEvent,
     ErrorEvent,
@@ -17,8 +17,8 @@ from wiley_harness_agent.provider import (
     ToolCall,
     UsageEvent,
 )
-from wiley_harness_agent.usage import ChatUsage
-from wiley_harness_agent.text_editor import TEXT_EDITOR_TOOL, TextEditorError, execute_text_editor
+from wiley_harness_agent.agent.usage import ChatUsage
+from wiley_harness_agent.agent.text_editor import TEXT_EDITOR_TOOL, TextEditorError, execute_text_editor
 
 
 @dataclass(frozen=True, slots=True)

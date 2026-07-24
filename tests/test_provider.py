@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from wiley_harness_agent.provider import (
+from wiley_harness_agent.agent.provider import (
     AnthropicProvider,
     BaseProvider,
     DoneEvent,
@@ -17,7 +17,7 @@ from wiley_harness_agent.provider import (
     ToolResult,
     UsageEvent,
 )
-from wiley_harness_agent.provider.anthropic import from_event
+from wiley_harness_agent.agent.provider.anthropic import from_event
 
 
 def test_provider_contract_is_abstract() -> None:
@@ -79,7 +79,7 @@ def test_anthropic_provider_decodes_sse(monkeypatch: pytest.MonkeyPatch) -> None
             return Response()
 
     monkeypatch.setattr(
-        "wiley_harness_agent.provider.anthropic.aiohttp.ClientSession",
+        "wiley_harness_agent.agent.provider.anthropic.aiohttp.ClientSession",
         lambda **kwargs: Session(),
     )
 

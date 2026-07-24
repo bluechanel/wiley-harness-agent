@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 from uuid import UUID, uuid4
 
-from wiley_harness_agent.usage import ChatUsage
+from wiley_harness_agent.agent.usage import ChatUsage
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SESSIONS_DIR = PROJECT_ROOT / "sessions"
 SessionRole = Literal["assistant", "user", "tool_call", "tool_output"]
 

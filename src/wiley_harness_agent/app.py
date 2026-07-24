@@ -1,11 +1,17 @@
+"""Application entry point: assemble the agent services and launch the TUI."""
+
 import argparse
 from collections.abc import Sequence
 
-from wiley_harness_agent.chat import ChatService
-from wiley_harness_agent.config import ConfigError, load_config
-from wiley_harness_agent.conversation import ConversationService
-from wiley_harness_agent.session import SessionError, SessionStore
-from wiley_harness_agent.ui import ChatApp
+from wiley_harness_agent.agent import (
+    ChatService,
+    ConfigError,
+    ConversationService,
+    SessionError,
+    SessionStore,
+    load_config,
+)
+from wiley_harness_agent.tui import ChatApp
 
 
 def main(argv: Sequence[str] | None = None) -> None:

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from wiley_harness_agent.provider.events import ProviderEvent
+from wiley_harness_agent.agent.provider.events import ProviderEvent
 
 
 class ProviderError(RuntimeError):

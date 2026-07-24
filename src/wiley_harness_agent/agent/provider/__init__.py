@@ -1,8 +1,8 @@
 """LLM provider implementations."""
 
-from wiley_harness_agent.provider.anthropic import AnthropicProvider
-from wiley_harness_agent.provider.base import BaseProvider, ProviderError
-from wiley_harness_agent.provider.events import (
+from wiley_harness_agent.agent.provider.anthropic import AnthropicProvider
+from wiley_harness_agent.agent.provider.base import BaseProvider, ProviderError
+from wiley_harness_agent.agent.provider.events import (
     DoneEvent,
     ErrorEvent,
     ProviderEvent,

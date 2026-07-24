@@ -1,8 +1,8 @@
 import asyncio
 
-from wiley_harness_agent.chat import ChatService
-from wiley_harness_agent.config import AnthropicConfig
-from wiley_harness_agent.provider import (
+from wiley_harness_agent.agent.chat import ChatService
+from wiley_harness_agent.agent.config import AnthropicConfig
+from wiley_harness_agent.agent.provider import (
     DoneEvent,
     ProviderUsage,
     ReasoningDelta,

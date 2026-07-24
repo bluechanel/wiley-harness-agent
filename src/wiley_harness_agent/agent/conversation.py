@@ -1,8 +1,8 @@
 from typing import Any, AsyncIterator
 
-from wiley_harness_agent.chat import ChatService, ChatStreamEvent
-from wiley_harness_agent.session import SessionRecord, SessionStore
-from wiley_harness_agent.usage import ChatUsage
+from wiley_harness_agent.agent.chat import ChatService, ChatStreamEvent
+from wiley_harness_agent.agent.session import SessionRecord, SessionStore
+from wiley_harness_agent.agent.usage import ChatUsage
 
 
 class ConversationService:
