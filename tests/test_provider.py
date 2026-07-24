@@ -91,8 +91,10 @@ def test_anthropic_provider_decodes_sse(monkeypatch: pytest.MonkeyPatch) -> None
                 base_url="https://api.anthropic.com",
             ).stream_request(
                 [{"role": "user", "content": "hello"}],
-                model_name="claude-test",
-                reasoning={"type": "enabled", "budget_tokens": 1024},
+                model="claude-test",
+                thinking={"type": "enabled", "budget_tokens": 1024},
+                system="be brief",
+                tools=[{"name": "echo", "input_schema": {"type": "object"}}],
                 max_tokens=2048,
             )
         ]
@@ -110,9 +112,23 @@ def test_anthropic_provider_decodes_sse(monkeypatch: pytest.MonkeyPatch) -> None
         "stream": True,
         "model": "claude-test",
         "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "system": "be brief",
+        "tools": [{"name": "echo", "input_schema": {"type": "object"}}],
         "max_tokens": 2048,
     }
     assert captured["headers"]["x-api-key"] == "key"
+
+
+def test_anthropic_provider_rejects_unknown_request_params() -> None:
+    provider = AnthropicProvider(api_key="key", base_url="https://api.anthropic.com")
+
+    with pytest.raises(TypeError):
+        provider.stream_request(
+            [{"role": "user", "content": "hello"}],
+            model="claude-test",
+            max_tokens=1024,
+            not_a_real_param=True,
+        )
 
 
 def test_anthropic_provider_requires_api_key() -> None:

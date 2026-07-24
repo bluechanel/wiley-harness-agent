@@ -1,7 +1,8 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Literal
 
 from wiley_harness_agent.agent.config import AnthropicConfig
 from wiley_harness_agent.agent.provider import (
@@ -17,8 +18,9 @@ from wiley_harness_agent.agent.provider import (
     ToolCall,
     UsageEvent,
 )
+from wiley_harness_agent.agent.prompt_template import build_system_prompt
+from wiley_harness_agent.agent.tools import Tool
 from wiley_harness_agent.agent.usage import ChatUsage
-from wiley_harness_agent.agent.text_editor import TEXT_EDITOR_TOOL, TextEditorError, execute_text_editor
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,13 +38,15 @@ class ChatStreamEvent:
     total_usage: ChatUsage | None = None
 
 
-class ChatService:
-    """Manage Anthropic requests and in-memory conversation history."""
+class AgentService:
+    """Run the agent loop: model requests, tool execution, in-memory history."""
 
     def __init__(
         self,
         config: AnthropicConfig,
         *,
+        instruction: str | None = None,
+        tools: Sequence[Tool] = (),
         messages: list[dict[str, str]] | None = None,
         total_usage: ChatUsage | None = None,
     ) -> None:
@@ -50,6 +54,9 @@ class ChatService:
         self._model = config.model
         self._max_tokens = config.max_tokens
         self._thinking_budget_tokens = config.thinking_budget_tokens
+        self._tools = tuple(tools)
+        self._tools_by_name = {tool.name: tool for tool in self._tools}
+        self._system_prompt = build_system_prompt(instruction)
         self._messages = list(messages or [])
         self._total_usage = total_usage or ChatUsage()
         self._stream_lock = asyncio.Lock()
@@ -74,26 +81,18 @@ class ChatService:
         )
 
     async def stream(self, user_input: str) -> AsyncIterator[ChatStreamEvent]:
-        """Yield thinking and answer text as it arrives from Anthropic."""
+        """Yield thinking and answer text as it arrives from the provider."""
         async with self._stream_lock:
             initial_message_count = len(self._messages)
             self._messages.append({"role": "user", "content": user_input})
             answer_parts: list[str] = []
             try:
-                reasoning = None
-                if self._thinking_budget_tokens:
-                    reasoning = {
-                        "type": "enabled",
-                        "budget_tokens": self._thinking_budget_tokens,
-                    }
-
+                request_options = self._request_options()
                 accumulated_usage = ProviderUsage()
                 while True:
                     response_stream = self._provider.stream_request(
                         self._messages,
-                        model_name=self._model,
-                        reasoning=reasoning,
-                        max_tokens=self._max_tokens
+                        **request_options,
                     )
                     usage = ProviderUsage()
                     tool_inputs: dict[int, str] = {}
@@ -165,10 +164,7 @@ class ChatService:
                         block = tool_blocks[index]
                         arguments = json.loads(tool_inputs.get(index, "{}"))
                         block["input"] = arguments
-                        try:
-                            result = execute_text_editor(arguments)
-                        except (TextEditorError, OSError) as exc:
-                            result = f"Error: {exc}"
+                        result = self._execute_tool(str(block.get("name", "")), arguments)
                         results.append({"type": "tool_result", "tool_use_id": block.get("id", ""), "content": result})
                     self._messages.append({"role": "user", "content": results})
                 chat_usage = _to_chat_usage(accumulated_usage)
@@ -185,6 +181,33 @@ class ChatService:
             except BaseException:
                 del self._messages[initial_message_count:]
                 raise
+
+    def _request_options(self) -> dict[str, Any]:
+        """Assemble request parameter values for the provider's explicit params."""
+        options: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+        }
+        if self._thinking_budget_tokens:
+            options["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget_tokens,
+            }
+        if self._system_prompt:
+            options["system"] = self._system_prompt
+        if self._tools:
+            options["tools"] = [dict(tool.definition) for tool in self._tools]
+        return options
+
+    def _execute_tool(self, name: str, arguments: Mapping[str, Any]) -> str:
+        """Run one registered tool; failures come back as an error tool result."""
+        tool = self._tools_by_name.get(name)
+        if tool is None:
+            return f"Error: unknown tool: {name!r}"
+        try:
+            return tool.execute(arguments)
+        except Exception as exc:
+            return f"Error: {exc}"
 
 
 def _to_chat_usage(usage: ProviderUsage) -> ChatUsage:

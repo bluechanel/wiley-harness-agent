@@ -1,6 +1,6 @@
 from typing import Any, AsyncIterator
 
-from wiley_harness_agent.agent.chat import ChatService, ChatStreamEvent
+from wiley_harness_agent.agent.service import AgentService, ChatStreamEvent
 from wiley_harness_agent.agent.session import SessionRecord, SessionStore
 from wiley_harness_agent.agent.usage import ChatUsage
 
@@ -8,8 +8,8 @@ from wiley_harness_agent.agent.usage import ChatUsage
 class ConversationService:
     """Coordinate model streaming with durable session records."""
 
-    def __init__(self, chat: ChatService, session: SessionStore) -> None:
-        self._chat = chat
+    def __init__(self, agent: AgentService, session: SessionStore) -> None:
+        self._agent = agent
         self._session = session
 
     @property
@@ -28,7 +28,7 @@ class ConversationService:
         total_usage = self._session.total_usage
 
         try:
-            async for event in self._chat.stream(user_input):
+            async for event in self._agent.stream(user_input):
                 if event.kind == "reasoning":
                     reasoning_parts.append(event.text)
                 elif event.kind == "answer":

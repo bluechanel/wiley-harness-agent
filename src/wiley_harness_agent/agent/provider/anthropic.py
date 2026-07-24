@@ -37,16 +37,48 @@ class AnthropicProvider(BaseProvider):
         self,
         messages: list[dict[str, Any]],
         *,
-        model_name: str | None = None,
-        reasoning: Mapping[str, Any] | None = None,
-        **options: Any,
+        model: str,
+        max_tokens: int,
+        cache_control: dict[str, Any] | None = None,
+        container: str | None = None,
+        inference_geo: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        output_config: dict[str, Any] | None = None,
+        service_tier: str | None = None,
+        stop_sequences: list[str] | None = None,
+        system: str | list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        thinking: dict[str, Any] | None = None,
+        tool_choice: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
     ) -> AsyncIterator[ProviderEvent]:
-        body = dict(options)
-        body.update(messages=messages, stream=True)
-        if model_name is not None:
-            body["model"] = model_name
-        if reasoning is not None:
-            body["thinking"] = dict(reasoning)
+        body: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "stream": True,
+        }
+        optional_fields = {
+            "cache_control": cache_control,
+            "container": container,
+            "inference_geo": inference_geo,
+            "metadata": metadata,
+            "output_config": output_config,
+            "service_tier": service_tier,
+            "stop_sequences": stop_sequences,
+            "system": system,
+            "temperature": temperature,
+            "thinking": thinking,
+            "tool_choice": tool_choice,
+            "tools": tools,
+            "top_k": top_k,
+            "top_p": top_p,
+        }
+        body.update(
+            {name: value for name, value in optional_fields.items() if value is not None}
+        )
 
         try:
             async with aiohttp.ClientSession(timeout=self._timeout) as session:

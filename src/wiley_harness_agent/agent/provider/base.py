@@ -1,7 +1,7 @@
-"""Provider contract used by the chat service."""
+"""Provider contract used by the agent service."""
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from typing import Any
 
 from wiley_harness_agent.agent.provider.events import ProviderEvent
@@ -34,9 +34,15 @@ class BaseProvider(ABC):
     def stream_request(
         self,
         messages: list[dict[str, Any]],
-        *,
-        model_name: str | None = None,
-        reasoning: Mapping[str, Any] | None = None,
-        **options: Any,
+        **params: Any,
     ) -> AsyncIterator[ProviderEvent]:
-        """Stream a model response for the supplied conversation messages."""
+        """Run one streaming request and decode the vendor SSE stream.
+
+        Implementations must override this with `messages` required and every
+        vendor-supported request parameter declared explicitly as a
+        keyword-only argument — no opaque option pass-through, so an unknown
+        parameter fails with TypeError at the call site. Parameter values are
+        still decided by the caller (`AgentService._request_options`);
+        providers add transport details (endpoint, headers, stream flag) and
+        translate vendor events into the provider-neutral types.
+        """
