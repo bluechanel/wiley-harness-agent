@@ -10,6 +10,7 @@ from wiley_harness_agent.agent.provider import (
     ToolCall,
     UsageEvent,
 )
+from wiley_harness_agent.agent.prompt_template import BasePromptProvider
 from wiley_harness_agent.agent.service import AgentService
 from wiley_harness_agent.agent.tools import Tool
 
@@ -143,3 +144,30 @@ def test_agent_service_reports_unknown_tool_as_error_result() -> None:
     tool_result = requests[1][-1]["content"][0]
     assert tool_result["tool_use_id"] == "call-1"
     assert "unknown tool" in tool_result["content"]
+
+
+def test_agent_service_composes_system_prompt_from_providers() -> None:
+    requests: list[dict] = []
+
+    class Provider:
+        async def stream_request(self, messages, **options):
+            requests.append(dict(options))
+            yield TextDelta("ok", index=0)
+            yield UsageEvent(ProviderUsage(), stop_reason="end_turn")
+            yield DoneEvent()
+
+    class Section(BasePromptProvider):
+        def provide(self) -> str | None:
+            return "# Extra\n\nsection"
+
+    agent = AgentService(
+        _config(), instruction="be brief", prompt_providers=(Section(),)
+    )
+    agent._provider = Provider()  # type: ignore[assignment]
+
+    async def collect_events():
+        return [event async for event in agent.stream("hello")]
+
+    asyncio.run(collect_events())
+
+    assert requests[0]["system"] == "be brief\n\n# Extra\n\nsection"

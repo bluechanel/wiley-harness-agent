@@ -5,9 +5,9 @@
 - `src/wiley_harness_agent/` 按职责拆分为两个子包：
   - `agent/`：harness 部分（`config`、`usage`、`provider/`、`service` 中的 `AgentService` agent 循环、`prompt_template` system prompt 组装、`conversation`、`session` 持久化、`tools`/`text_editor` 工具）。该包与 UI 无关，禁止导入 `textual` 或 `tui` 包。对外 API 统一从 `agent/__init__.py` 导出。
   - `tui/`：Textual 界面，单向依赖 `wiley_harness_agent.agent` 的公开 API。`tui/render.py` 负责把 agent 层的记录/事件解析为展示用 Markdown（纯函数），`tui/app.py` 只负责界面组件与交互。
-- `agent/factory.py` 的 `create_agent(session_id=None, *, instruction=None, tools=None)` 是 agent 模块的唯一入口：session_id 传入则恢复会话、省略则自动生成 UUID；instruction 为系统提示词；tools 省略时启用 `DEFAULT_TOOLS`。外部（含 TUI 组装）一律通过它创建 agent，不手工拼装 AgentService/SessionStore。
+- `agent/factory.py` 的 `create_agent(session_id=None, *, instruction=None, tools=None, prompt_providers=None)` 是 agent 模块的唯一入口：session_id 传入则恢复会话、省略则自动生成 UUID；instruction 为系统提示词首段；tools 省略时启用 `DEFAULT_TOOLS`；prompt_providers 省略时使用 `default_prompt_providers(config)` 的默认组合。外部（含 TUI 组装）一律通过它创建 agent，不手工拼装 AgentService/SessionStore。
 - 新增工具时在 `agent/tools.py` 用 `Tool`（API schema + 本地执行器）封装并按需加入 `DEFAULT_TOOLS`；工具执行失败以 `Error: ...` 字符串作为 tool_result 返回给模型，不中断流。
-- system prompt 统一由 `agent/prompt_template.py` 的 `build_system_prompt(instruction)` 组装，不要在其他位置手工拼接系统提示词；工具的 schema/描述通过 API 请求的 `tools` 参数传递，不拼入 system prompt。
+- system prompt 统一由 `agent/prompt_template.py` 的 `build_prompt(instruction, providers)` 组装：instruction 为首段，其后按序拼接各 prompt provider 的段落。每个段落由 `BasePromptProvider` 子类提供（`ModelProvider`/`WorkspaceProvider`/`AgentMDProvider`/`SkillProvider`/`MemoryProvider`），`provide()` 返回完整 markdown 段落、返回 None 则跳过该段，且不得因来源缺失/不可读抛异常。新增段落时实现 `BasePromptProvider` 并加入 `default_prompt_providers`；注意与 LLM 侧 `agent/provider/base.py` 的 `BaseProvider` 是两套体系，不要混用。`SkillProvider`（扫描 `workspace/skills/*.md` 列清单）与 `MemoryProvider`（读 `workspace/MEMORY.md` 全文）目前为骨架，注入格式与路径约定后续迭代。不要在其他位置手工拼接系统提示词；工具的 schema/描述通过 API 请求的 `tools` 参数传递，不拼入 system prompt。
 - 包顶层的 `app.py` 是组装入口：只负责读取参数、调用 `create_agent` 并启动 TUI，不包含业务实现。
 - 新增 harness 能力放入 `agent/`，新增展示逻辑放入 `tui/`；两侧共享的数据类型定义在 `agent/` 中，由 `tui` 消费。
 

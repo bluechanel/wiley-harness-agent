@@ -18,7 +18,7 @@ from wiley_harness_agent.agent.provider import (
     ToolCall,
     UsageEvent,
 )
-from wiley_harness_agent.agent.prompt_template import build_system_prompt
+from wiley_harness_agent.agent.prompt_template import BasePromptProvider, build_prompt
 from wiley_harness_agent.agent.tools import Tool
 from wiley_harness_agent.agent.usage import ChatUsage
 
@@ -47,6 +47,7 @@ class AgentService:
         *,
         instruction: str | None = None,
         tools: Sequence[Tool] = (),
+        prompt_providers: Sequence[BasePromptProvider] = (),
         messages: list[dict[str, str]] | None = None,
         total_usage: ChatUsage | None = None,
     ) -> None:
@@ -56,7 +57,7 @@ class AgentService:
         self._thinking_budget_tokens = config.thinking_budget_tokens
         self._tools = tuple(tools)
         self._tools_by_name = {tool.name: tool for tool in self._tools}
-        self._system_prompt = build_system_prompt(instruction)
+        self._system_prompt = build_prompt(instruction, prompt_providers)
         self._messages = list(messages or [])
         self._total_usage = total_usage or ChatUsage()
         self._stream_lock = asyncio.Lock()
