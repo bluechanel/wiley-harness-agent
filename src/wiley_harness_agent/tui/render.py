@@ -1,4 +1,4 @@
-"""Parse agent-layer records and usage into Markdown views for display."""
+"""Parse agent-layer records and usage into display views for the TUI."""
 
 import json
 import re
@@ -9,10 +9,14 @@ from wiley_harness_agent.agent import ChatUsage, SessionRecord
 
 @dataclass(frozen=True, slots=True)
 class MessageView:
-    """One renderable Markdown block plus its CSS classes."""
+    """One renderable Markdown block plus its presentation hints.
+
+    collapsible_title 非空表示该块默认收起，点击标题行展开/收起。
+    """
 
     markdown: str
     classes: str = ""
+    collapsible_title: str = ""
 
 
 WELCOME_VIEW = MessageView("### 助手\n\n你好！我是你的 AI 助手。直接输入消息开始对话。")
@@ -23,10 +27,6 @@ _TOOL_PAYLOAD_MAX_CHARS = 2000
 
 def user_markdown(content: str) -> str:
     return f"### 你\n\n{content}"
-
-
-def reasoning_markdown(text: str) -> str:
-    return f"### 思考过程\n\n{text}"
 
 
 def answer_markdown(text: str) -> str:
@@ -47,45 +47,50 @@ def usage_bar_text(total: ChatUsage, context_tokens: int) -> str:
     )
 
 
-def tool_call_markdown(tool_name: str, arguments: object) -> str:
-    return f"### 工具调用：{tool_name}\n\n{_payload_markdown(arguments)}"
+def reasoning_view(text: str) -> MessageView:
+    return MessageView(text, classes="reasoning", collapsible_title="思考过程")
 
 
-def tool_output_markdown(
+def tool_call_view(tool_name: str, arguments: object) -> MessageView:
+    return MessageView(
+        _payload_markdown(arguments),
+        classes="tool",
+        collapsible_title=f"工具调用：{tool_name}",
+    )
+
+
+def tool_output_view(
     tool_name: str, output: object, *, is_error: bool = False
-) -> str:
+) -> MessageView:
     heading = "工具输出（错误）" if is_error else "工具输出"
-    return f"### {heading}：{tool_name}\n\n{_payload_markdown(output)}"
+    return MessageView(
+        _payload_markdown(output),
+        classes="tool",
+        collapsible_title=f"{heading}：{tool_name}",
+    )
 
 
 def render_record(record: SessionRecord) -> list[MessageView]:
-    """Parse one session record into the Markdown views that display it."""
+    """Parse one session record into the views that display it."""
     content = _record_content(record)
     if record.role == "user":
         return [MessageView(user_markdown(content))]
     if record.role == "assistant" and record.kind == "thinking":
-        return [MessageView(reasoning_markdown(content), classes="reasoning")]
+        return [reasoning_view(content)]
     if record.role == "assistant" and record.kind == "answer":
         return [MessageView(answer_markdown(content))]
     if record.role == "assistant" and record.kind == "error":
         return [MessageView(error_markdown(content))]
     if record.role == "tool_call":
         tool_name = str((record.metadata or {}).get("tool_name", "tool"))
-        return [
-            MessageView(
-                tool_call_markdown(tool_name, record.content), classes="tool"
-            )
-        ]
+        return [tool_call_view(tool_name, record.content)]
     if record.role == "tool_output":
         metadata = record.metadata or {}
         return [
-            MessageView(
-                tool_output_markdown(
-                    str(metadata.get("tool_name", "tool")),
-                    record.content,
-                    is_error=bool(metadata.get("is_error")),
-                ),
-                classes="tool",
+            tool_output_view(
+                str(metadata.get("tool_name", "tool")),
+                record.content,
+                is_error=bool(metadata.get("is_error")),
             )
         ]
     return []

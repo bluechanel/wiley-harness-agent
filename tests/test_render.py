@@ -24,35 +24,43 @@ def test_usage_bar_text_shows_totals_and_context() -> None:
     assert text == "输入 1,200 · 输出 34 · 缓存 6,005 · 上下文 7,890 tokens"
 
 
-def test_tool_call_markdown_renders_arguments_as_json() -> None:
-    markdown = render.tool_call_markdown("bash", {"command": "ls -la"})
-    assert markdown.startswith("### 工具调用：bash")
-    assert '"command": "ls -la"' in markdown
-    assert "```json" in markdown
+def test_reasoning_view_is_collapsible_with_raw_text() -> None:
+    view = render.reasoning_view("thinking hard")
+    assert view.collapsible_title == "思考过程"
+    assert view.classes == "reasoning"
+    assert view.markdown == "thinking hard"
 
 
-def test_tool_output_markdown_marks_errors() -> None:
-    markdown = render.tool_output_markdown("bash", "Error: denied", is_error=True)
-    assert "### 工具输出（错误）：bash" in markdown
-    assert "Error: denied" in markdown
+def test_tool_call_view_renders_arguments_as_json() -> None:
+    view = render.tool_call_view("bash", {"command": "ls -la"})
+    assert view.collapsible_title == "工具调用：bash"
+    assert view.classes == "tool"
+    assert '"command": "ls -la"' in view.markdown
+    assert "```json" in view.markdown
 
 
-def test_tool_output_markdown_extends_fence_past_backticks() -> None:
-    markdown = render.tool_output_markdown("bash", "```python\nprint()\n```")
-    assert "````\n```python" in markdown
+def test_tool_output_view_marks_errors() -> None:
+    view = render.tool_output_view("bash", "Error: denied", is_error=True)
+    assert view.collapsible_title == "工具输出（错误）：bash"
+    assert "Error: denied" in view.markdown
 
 
-def test_tool_output_markdown_clips_long_output() -> None:
+def test_tool_output_view_extends_fence_past_backticks() -> None:
+    view = render.tool_output_view("bash", "```python\nprint()\n```")
+    assert "````\n```python" in view.markdown
+
+
+def test_tool_output_view_clips_long_output() -> None:
     output = "\n".join(f"line {i}" for i in range(100))
-    markdown = render.tool_output_markdown("bash", output)
-    assert "line 0" in markdown
-    assert "line 99" not in markdown
-    assert "已截断" in markdown
-    assert "100 行" in markdown
+    view = render.tool_output_view("bash", output)
+    assert "line 0" in view.markdown
+    assert "line 99" not in view.markdown
+    assert "已截断" in view.markdown
+    assert "100 行" in view.markdown
 
 
-def test_tool_output_markdown_handles_empty_output() -> None:
-    assert "（空）" in render.tool_output_markdown("bash", "")
+def test_tool_output_view_handles_empty_output() -> None:
+    assert "（空）" in render.tool_output_view("bash", "").markdown
 
 
 def test_render_record_tool_call_and_output() -> None:
@@ -66,7 +74,7 @@ def test_render_record_tool_call_and_output() -> None:
     )
     assert len(call_views) == 1
     assert call_views[0].classes == "tool"
-    assert "### 工具调用：bash" in call_views[0].markdown
+    assert call_views[0].collapsible_title == "工具调用：bash"
 
     output_views = render.render_record(
         _record(
@@ -80,11 +88,20 @@ def test_render_record_tool_call_and_output() -> None:
             },
         )
     )
-    assert output_views[0].classes == "tool"
-    assert "### 工具输出（错误）：bash" in output_views[0].markdown
+    assert output_views[0].collapsible_title == "工具输出（错误）：bash"
+    assert "Error: denied" in output_views[0].markdown
 
 
-def test_render_record_answer_no_longer_emits_usage_view() -> None:
+def test_render_record_thinking_is_collapsible() -> None:
+    views = render.render_record(
+        _record("assistant", "step by step", kind="thinking")
+    )
+    assert len(views) == 1
+    assert views[0].collapsible_title == "思考过程"
+    assert views[0].markdown == "step by step"
+
+
+def test_render_record_answer_stays_expanded_without_usage_view() -> None:
     record = SessionRecord(
         timestamp="2026-01-01T00:00:00+00:00",
         session_id="s",
@@ -96,4 +113,5 @@ def test_render_record_answer_no_longer_emits_usage_view() -> None:
     )
     views = render.render_record(record)
     assert len(views) == 1
+    assert views[0].collapsible_title == ""
     assert "### 助手" in views[0].markdown

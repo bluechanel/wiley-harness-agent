@@ -4,7 +4,7 @@ from typing import AsyncIterator, Protocol
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Footer, Header, Input, Markdown, Static
+from textual.widgets import Collapsible, Footer, Header, Input, Markdown, Static
 
 from wiley_harness_agent.agent import ChatStreamEvent, ChatUsage, SessionRecord
 import wiley_harness_agent.tui.render as render
@@ -38,13 +38,18 @@ class ChatApp(App[None]):
         margin: 0 0 1 0;
     }
 
-    #message-list > Markdown.reasoning {
+    #message-list > Collapsible {
+        margin: 0 0 1 0;
+        border-top: none;
+        padding-bottom: 0;
+    }
+
+    #message-list > Collapsible.reasoning Markdown {
         color: #9A9A9A;
     }
 
-    #message-list > Markdown.tool {
+    #message-list > Collapsible.tool Markdown {
         color: #8A8A8A;
-        border-left: thick #4A4A4A;
     }
 
     #prompt {
@@ -140,6 +145,20 @@ class ChatApp(App[None]):
         return self.query_one("#message-list", Vertical)
 
     async def _mount_view(self, view: render.MessageView) -> Markdown:
+        """Mount one view; collapsible views start collapsed. Returns the
+        inner Markdown widget so streamed deltas can keep updating it."""
+        if view.collapsible_title:
+            body = Markdown(view.markdown)
+            await self._message_list.mount(
+                Collapsible(
+                    body,
+                    title=view.collapsible_title,
+                    collapsed=True,
+                    classes=view.classes,
+                )
+            )
+            self._scroll_to_bottom()
+            return body
         return await self._mount_markdown(view.markdown, classes=view.classes)
 
     async def _mount_markdown(self, content: str, *, classes: str = "") -> Markdown:
@@ -180,16 +199,12 @@ class ChatApp(App[None]):
             async for event in self.chat.stream(user_input):
                 if event.kind == "reasoning":
                     if reasoning_widget is None:
-                        reasoning_widget = await self._mount_markdown(
-                            render.reasoning_markdown(""),
-                            classes="reasoning",
+                        reasoning_widget = await self._mount_view(
+                            render.reasoning_view("")
                         )
                     reasoning_text += event.text
                     self._status.update("思考中…")
-                    await self._update_markdown(
-                        reasoning_widget,
-                        render.reasoning_markdown(reasoning_text),
-                    )
+                    await self._update_markdown(reasoning_widget, reasoning_text)
                 elif event.kind == "answer":
                     if answer_widget is None:
                         answer_widget = await self._mount_markdown(
@@ -208,20 +223,16 @@ class ChatApp(App[None]):
                     reasoning_text = ""
                     answer_text = ""
                     self._status.update(f"执行工具：{event.tool_name}…")
-                    await self._mount_markdown(
-                        render.tool_call_markdown(
-                            event.tool_name, event.tool_arguments
-                        ),
-                        classes="tool",
+                    await self._mount_view(
+                        render.tool_call_view(event.tool_name, event.tool_arguments)
                     )
                 elif event.kind == "tool_output":
-                    await self._mount_markdown(
-                        render.tool_output_markdown(
+                    await self._mount_view(
+                        render.tool_output_view(
                             event.tool_name,
                             event.text,
                             is_error=event.tool_is_error,
-                        ),
-                        classes="tool",
+                        )
                     )
                 elif event.kind == "usage":
                     if event.total_usage:
