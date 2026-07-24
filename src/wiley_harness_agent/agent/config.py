@@ -19,6 +19,11 @@ class AnthropicConfig:
     thinking_budget_tokens: int = 4096
 
 
+@dataclass(frozen=True, slots=True)
+class DebugConfig:
+    enabled: bool = False
+
+
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AnthropicConfig:
     """Load and validate the local Anthropic configuration."""
     try:
@@ -67,3 +72,21 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AnthropicConfig:
         max_tokens=max_tokens,
         thinking_budget_tokens=thinking_budget_tokens,
     )
+
+
+def load_debug_config(path: Path = DEFAULT_CONFIG_PATH) -> DebugConfig:
+    """Load the optional [debug] section; missing file/section means disabled."""
+    try:
+        with path.open("rb") as config_file:
+            config = tomllib.load(config_file)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return DebugConfig()
+
+    debug_config = config.get("debug")
+    if not isinstance(debug_config, dict):
+        return DebugConfig()
+
+    enabled = debug_config.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("配置项 debug.enabled 必须是布尔值。")
+    return DebugConfig(enabled=enabled)

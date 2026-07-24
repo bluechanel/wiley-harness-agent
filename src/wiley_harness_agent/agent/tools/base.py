@@ -1,10 +1,8 @@
-"""Tool abstraction callable by the agent, plus built-in tools."""
+"""Tool abstraction callable by the agent."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
-
-from wiley_harness_agent.agent.text_editor import TEXT_EDITOR_TOOL, execute_text_editor
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,8 +15,3 @@ class Tool:
     @property
     def name(self) -> str:
         return str(self.definition["name"])
-
-
-TEXT_EDITOR = Tool(definition=TEXT_EDITOR_TOOL, execute=execute_text_editor)
-
-DEFAULT_TOOLS: tuple[Tool, ...] = (TEXT_EDITOR,)

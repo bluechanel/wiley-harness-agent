@@ -1,10 +1,11 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator, Literal
 
 from wiley_harness_agent.agent.config import AnthropicConfig
+from wiley_harness_agent.agent.debug import DebugRecorder
 from wiley_harness_agent.agent.provider import (
     AnthropicProvider,
     DoneEvent,
@@ -50,6 +51,7 @@ class AgentService:
         prompt_providers: Sequence[BasePromptProvider] = (),
         messages: list[dict[str, str]] | None = None,
         total_usage: ChatUsage | None = None,
+        debug_recorder: DebugRecorder | None = None,
     ) -> None:
         self._provider = AnthropicProvider(api_key=config.api_key, base_url=config.base_url)
         self._model = config.model
@@ -61,6 +63,8 @@ class AgentService:
         self._messages = list(messages or [])
         self._total_usage = total_usage or ChatUsage()
         self._stream_lock = asyncio.Lock()
+        self._debug = debug_recorder
+        self._debug_turn = 0
 
     async def send(self, user_input: str) -> ChatResult:
         answer_parts: list[str] = []
@@ -87,10 +91,24 @@ class AgentService:
             initial_message_count = len(self._messages)
             self._messages.append({"role": "user", "content": user_input})
             answer_parts: list[str] = []
+            self._debug_turn += 1
+            turn = self._debug_turn
+            round_index = 0
             try:
                 request_options = self._request_options()
                 accumulated_usage = ProviderUsage()
                 while True:
+                    round_index += 1
+                    if self._debug is not None:
+                        self._debug.record_request(
+                            turn=turn,
+                            round_index=round_index,
+                            body={
+                                **request_options,
+                                "messages": self._messages,
+                                "stream": True,
+                            },
+                        )
                     response_stream = self._provider.stream_request(
                         self._messages,
                         **request_options,
@@ -102,6 +120,10 @@ class AgentService:
                     text_blocks: dict[int, dict[str, object]] = {}
                     stop_reason: str | None = None
                     async for event in response_stream:
+                        if self._debug is not None:
+                            self._debug.record_response_event(
+                                turn=turn, round_index=round_index, event=event
+                            )
                         if isinstance(event, UsageEvent):
                             usage = usage.add(event.usage)
                             stop_reason = event.stop_reason or stop_reason
@@ -157,6 +179,13 @@ class AgentService:
                     }
                     final_content = [blocks[index] for index in sorted(blocks)]
                     accumulated_usage = accumulated_usage.add(usage)
+                    if self._debug is not None:
+                        self._debug.record_response_end(
+                            turn=turn,
+                            round_index=round_index,
+                            stop_reason=stop_reason,
+                            usage=asdict(usage),
+                        )
                     if stop_reason != "tool_use":
                         break
                     self._messages.append({"role": "assistant", "content": final_content})
@@ -165,8 +194,35 @@ class AgentService:
                         block = tool_blocks[index]
                         arguments = json.loads(tool_inputs.get(index, "{}"))
                         block["input"] = arguments
-                        result = self._execute_tool(str(block.get("name", "")), arguments)
-                        results.append({"type": "tool_result", "tool_use_id": block.get("id", ""), "content": result})
+                        tool_name = str(block.get("name", ""))
+                        tool_call_id = str(block.get("id", ""))
+                        if self._debug is not None:
+                            self._debug.record_tool_call(
+                                turn=turn,
+                                round_index=round_index,
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                arguments=arguments,
+                            )
+                        result, is_error = await asyncio.to_thread(
+                            self._execute_tool, tool_name, arguments
+                        )
+                        if self._debug is not None:
+                            self._debug.record_tool_result(
+                                turn=turn,
+                                round_index=round_index,
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                output=result,
+                            )
+                        tool_result: dict[str, object] = {
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": result,
+                        }
+                        if is_error:
+                            tool_result["is_error"] = True
+                        results.append(tool_result)
                     self._messages.append({"role": "user", "content": results})
                 chat_usage = _to_chat_usage(accumulated_usage)
                 self._total_usage = self._total_usage.add(chat_usage)
@@ -179,7 +235,14 @@ class AgentService:
                     {"role": "assistant", "content": "".join(answer_parts)}
                 )
                 yield ChatStreamEvent(kind="done")
-            except BaseException:
+            except BaseException as exc:
+                if self._debug is not None:
+                    self._debug.record_error(
+                        turn=turn,
+                        round_index=round_index,
+                        error_type=type(exc).__name__,
+                        message=str(exc),
+                    )
                 del self._messages[initial_message_count:]
                 raise
 
@@ -200,15 +263,17 @@ class AgentService:
             options["tools"] = [dict(tool.definition) for tool in self._tools]
         return options
 
-    def _execute_tool(self, name: str, arguments: Mapping[str, Any]) -> str:
+    def _execute_tool(
+        self, name: str, arguments: Mapping[str, Any]
+    ) -> tuple[str, bool]:
         """Run one registered tool; failures come back as an error tool result."""
         tool = self._tools_by_name.get(name)
         if tool is None:
-            return f"Error: unknown tool: {name!r}"
+            return f"Error: unknown tool: {name!r}", True
         try:
-            return tool.execute(arguments)
+            return tool.execute(arguments), False
         except Exception as exc:
-            return f"Error: {exc}"
+            return f"Error: {exc}", True
 
 
 def _to_chat_usage(usage: ProviderUsage) -> ChatUsage:

@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from wiley_harness_agent.agent.text_editor import TextEditorError, execute_text_editor
+from wiley_harness_agent.agent.tools.text_editor import (
+    TextEditorError,
+    execute_text_editor,
+)
 
 
 def test_create_and_view_range(tmp_path: Path) -> None:

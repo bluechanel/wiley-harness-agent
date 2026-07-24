@@ -4,8 +4,15 @@ This package is UI-agnostic. Front-ends (e.g. the TUI) should depend only on
 the interfaces exported here; `create_agent` is the module entry point.
 """
 
-from wiley_harness_agent.agent.config import AnthropicConfig, ConfigError, load_config
+from wiley_harness_agent.agent.config import (
+    AnthropicConfig,
+    ConfigError,
+    DebugConfig,
+    load_config,
+    load_debug_config,
+)
 from wiley_harness_agent.agent.conversation import ConversationService
+from wiley_harness_agent.agent.debug import DebugRecorder
 from wiley_harness_agent.agent.factory import create_agent
 from wiley_harness_agent.agent.prompt_template import (
     AgentMDProvider,
@@ -37,6 +44,8 @@ __all__ = [
     "ConfigError",
     "ConversationService",
     "DEFAULT_TOOLS",
+    "DebugConfig",
+    "DebugRecorder",
     "MemoryProvider",
     "ModelProvider",
     "SessionError",
@@ -49,4 +58,5 @@ __all__ = [
     "create_agent",
     "default_prompt_providers",
     "load_config",
+    "load_debug_config",
 ]

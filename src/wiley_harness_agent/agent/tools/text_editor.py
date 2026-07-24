@@ -7,6 +7,8 @@ can be used directly in tests or by another agent runtime.
 from pathlib import Path
 from typing import Any, Mapping
 
+from wiley_harness_agent.agent.tools.base import Tool
+
 
 class TextEditorError(ValueError):
     """Raised when a text editor request is invalid or cannot be applied."""
@@ -107,5 +109,4 @@ def execute_text_editor(arguments: Mapping[str, Any]) -> str:
     raise TextEditorError(f"Unsupported mode: {mode}")
 
 
-# Short public alias for runtimes that register tools by callable name.
-text_editor = execute_text_editor
+TEXT_EDITOR = Tool(definition=TEXT_EDITOR_TOOL, execute=execute_text_editor)

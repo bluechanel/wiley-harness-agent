@@ -144,6 +144,7 @@ def test_agent_service_reports_unknown_tool_as_error_result() -> None:
     tool_result = requests[1][-1]["content"][0]
     assert tool_result["tool_use_id"] == "call-1"
     assert "unknown tool" in tool_result["content"]
+    assert tool_result["is_error"] is True
 
 
 def test_agent_service_composes_system_prompt_from_providers() -> None:

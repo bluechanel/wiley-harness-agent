@@ -4,3 +4,7 @@ base_url = "https://api.anthropic.com"
 model = "claude-sonnet-4-5"
 max_tokens = 8192
 thinking_budget_tokens = 4096
+
+[debug]
+# 开启后记录每轮 LLM 请求/流事件/工具执行到 sessions/<session_id>.debug.jsonl
+enabled = false
