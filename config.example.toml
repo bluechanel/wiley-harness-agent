@@ -8,3 +8,18 @@ thinking_budget_tokens = 4096
 [debug]
 # 开启后记录每轮 LLM 请求/流事件/工具执行到 sessions/<session_id>.debug.jsonl
 enabled = false
+
+# MCP server 配置（可选）：每个 [[mcp.servers]] 一个 server，
+# 其工具以 mcp__<name>__<tool> 名称并入 agent 工具集。
+# [[mcp.servers]]
+# name = "fetch"
+# transport = "stdio"
+# command = "uvx"
+# args = ["mcp-server-fetch"]
+# env = { KEY = "value" }        # 可选，与默认安全环境变量合并
+
+# [[mcp.servers]]
+# name = "docs"
+# transport = "http"
+# url = "https://example.com/mcp"
+# headers = { Authorization = "Bearer xxx" }   # 可选

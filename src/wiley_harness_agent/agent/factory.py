@@ -2,9 +2,15 @@
 
 from collections.abc import Sequence
 
-from wiley_harness_agent.agent.config import load_config, load_debug_config
+from wiley_harness_agent.agent.config import (
+    ConfigError,
+    load_config,
+    load_debug_config,
+    load_mcp_config,
+)
 from wiley_harness_agent.agent.conversation import ConversationService
 from wiley_harness_agent.agent.debug import DebugRecorder
+from wiley_harness_agent.agent.mcp import MCPClientManager
 from wiley_harness_agent.agent.prompt_template import (
     BasePromptProvider,
     default_prompt_providers,
@@ -28,6 +34,9 @@ def create_agent(
     prompt_providers 省略时使用 default_prompt_providers 的默认组合。
     config.toml 配置 [debug] enabled = true 时，把执行轨迹记录到
     sessions/<session_id>.debug.jsonl。
+    config.toml 配置 [[mcp.servers]] 时，连接各 MCP server 并把其工具
+    以 mcp__<server>__<tool> 名称并入工具集；连接失败的 server 记
+    warning 并跳过。调用方结束后应调用返回值的 close() 释放连接。
     """
     config = load_config()
     session = SessionStore(session_id)
@@ -41,10 +50,23 @@ def create_agent(
             max_tokens=config.max_tokens,
             thinking_budget_tokens=config.thinking_budget_tokens,
         )
+    base_tools = DEFAULT_TOOLS if tools is None else tuple(tools)
+    mcp_manager: MCPClientManager | None = None
+    mcp_servers = load_mcp_config()
+    if mcp_servers:
+        mcp_manager = MCPClientManager(mcp_servers)
+        mcp_manager.start()
+    all_tools = base_tools + (mcp_manager.tools if mcp_manager else ())
+    names = [tool.name for tool in all_tools]
+    duplicates = {name for name in names if names.count(name) > 1}
+    if duplicates:
+        if mcp_manager is not None:
+            mcp_manager.close()
+        raise ConfigError(f"工具名冲突：{sorted(duplicates)}")
     service = AgentService(
         config,
         instruction=instruction,
-        tools=DEFAULT_TOOLS if tools is None else tuple(tools),
+        tools=all_tools,
         prompt_providers=(
             default_prompt_providers(config)
             if prompt_providers is None
@@ -54,4 +76,8 @@ def create_agent(
         total_usage=session.total_usage,
         debug_recorder=debug_recorder,
     )
-    return ConversationService(service, session)
+    return ConversationService(
+        service,
+        session,
+        closer=mcp_manager.close if mcp_manager is not None else None,
+    )

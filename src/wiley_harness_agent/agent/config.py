@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
 
@@ -22,6 +23,17 @@ class AnthropicConfig:
 @dataclass(frozen=True, slots=True)
 class DebugConfig:
     enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerConfig:
+    name: str
+    transport: str  # "stdio" | "http"
+    command: str = ""  # stdio 必填
+    args: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+    url: str = ""  # http 必填
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AnthropicConfig:
@@ -90,3 +102,76 @@ def load_debug_config(path: Path = DEFAULT_CONFIG_PATH) -> DebugConfig:
     if not isinstance(enabled, bool):
         raise ConfigError("配置项 debug.enabled 必须是布尔值。")
     return DebugConfig(enabled=enabled)
+
+
+def _parse_str_table(raw: object, label: str) -> dict[str, str]:
+    """Validate an optional table of string keys/values (env, headers)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw.items()
+    ):
+        raise ConfigError(f"配置项 {label} 必须是字符串到字符串的表。")
+    return dict(raw)
+
+
+def _parse_mcp_server(raw: object, index: int) -> MCPServerConfig:
+    label = f"mcp.servers[{index}]"
+    if not isinstance(raw, dict):
+        raise ConfigError(f"配置项 {label} 必须是表。")
+
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ConfigError(f"配置项 {label}.name 不能为空。")
+    transport = raw.get("transport")
+    if transport not in ("stdio", "http"):
+        raise ConfigError(f"配置项 {label}.transport 必须是 \"stdio\" 或 \"http\"。")
+
+    command = raw.get("command", "")
+    args = raw.get("args", [])
+    url = raw.get("url", "")
+    if transport == "stdio":
+        if not isinstance(command, str) or not command.strip():
+            raise ConfigError(f"配置项 {label}.command 不能为空（stdio transport 必填）。")
+        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            raise ConfigError(f"配置项 {label}.args 必须是字符串数组。")
+    else:
+        if not isinstance(url, str) or not url.strip():
+            raise ConfigError(f"配置项 {label}.url 不能为空（http transport 必填）。")
+
+    return MCPServerConfig(
+        name=name.strip(),
+        transport=transport,
+        command=command.strip() if isinstance(command, str) else "",
+        args=tuple(args) if isinstance(args, list) else (),
+        env=_parse_str_table(raw.get("env"), f"{label}.env"),
+        url=url.strip() if isinstance(url, str) else "",
+        headers=_parse_str_table(raw.get("headers"), f"{label}.headers"),
+    )
+
+
+def load_mcp_config(path: Path = DEFAULT_CONFIG_PATH) -> tuple[MCPServerConfig, ...]:
+    """Load the optional [[mcp.servers]] tables; missing file/section means none."""
+    try:
+        with path.open("rb") as config_file:
+            config = tomllib.load(config_file)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return ()
+
+    mcp_config = config.get("mcp")
+    if not isinstance(mcp_config, dict):
+        return ()
+    servers_raw = mcp_config.get("servers")
+    if servers_raw is None:
+        return ()
+    if not isinstance(servers_raw, list):
+        raise ConfigError("配置项 mcp.servers 必须是表数组（[[mcp.servers]]）。")
+
+    servers = tuple(
+        _parse_mcp_server(raw, index) for index, raw in enumerate(servers_raw)
+    )
+    names = [server.name for server in servers]
+    duplicates = {name for name in names if names.count(name) > 1}
+    if duplicates:
+        raise ConfigError(f"配置项 mcp.servers 存在重复的 name：{sorted(duplicates)}")
+    return servers

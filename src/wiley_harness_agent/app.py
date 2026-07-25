@@ -32,4 +32,5 @@ def main(argv: Sequence[str] | None = None) -> None:
             context_tokens=agent.last_context_tokens,
         ).run()
     finally:
+        agent.close()
         print(f"resume agent: uv run main.py {agent.session_id}")

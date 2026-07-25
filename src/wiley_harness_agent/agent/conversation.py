@@ -1,4 +1,4 @@
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from wiley_harness_agent.agent.service import AgentService, ChatStreamEvent
 from wiley_harness_agent.agent.session import SessionRecord, SessionStore
@@ -8,9 +8,21 @@ from wiley_harness_agent.agent.usage import ChatUsage
 class ConversationService:
     """Coordinate model streaming with durable session records."""
 
-    def __init__(self, agent: AgentService, session: SessionStore) -> None:
+    def __init__(
+        self,
+        agent: AgentService,
+        session: SessionStore,
+        *,
+        closer: Callable[[], None] | None = None,
+    ) -> None:
         self._agent = agent
         self._session = session
+        self._closer = closer
+
+    def close(self) -> None:
+        """Release owned resources (e.g. MCP server connections); idempotent."""
+        if self._closer is not None:
+            self._closer()
 
     @property
     def session_id(self) -> str:

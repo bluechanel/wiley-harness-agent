@@ -8,12 +8,15 @@ from wiley_harness_agent.agent.config import (
     AnthropicConfig,
     ConfigError,
     DebugConfig,
+    MCPServerConfig,
     load_config,
     load_debug_config,
+    load_mcp_config,
 )
 from wiley_harness_agent.agent.conversation import ConversationService
 from wiley_harness_agent.agent.debug import DebugRecorder
 from wiley_harness_agent.agent.factory import create_agent
+from wiley_harness_agent.agent.mcp import MCPClientManager
 from wiley_harness_agent.agent.prompt_template import (
     AgentMDProvider,
     BasePromptProvider,
@@ -46,6 +49,8 @@ __all__ = [
     "DEFAULT_TOOLS",
     "DebugConfig",
     "DebugRecorder",
+    "MCPClientManager",
+    "MCPServerConfig",
     "MemoryProvider",
     "ModelProvider",
     "SessionError",
@@ -59,4 +64,5 @@ __all__ = [
     "default_prompt_providers",
     "load_config",
     "load_debug_config",
+    "load_mcp_config",
 ]
