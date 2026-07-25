@@ -13,7 +13,7 @@
 
 仓库是 uv workspace，packages 只分 agent 与 tui 两部分：
 
-- `packages/wiley-agent`：大而全的 agent 应用核心（UI 无关）——provider（契约 + 内置 `AnthropicProvider`）、内置工具集（`bash`、`text_editor`，auto-scan 组成 `DEFAULT_TOOLS`）、config.toml 解析、agent 循环、会话持久化、system prompt 组装、MCP client、debug。`bootstrap(session_id, config_path=...)` 读 config.toml 返回就绪 agent；需要自定义 provider/工具时用 `create_agent(provider=..., tools=...)`。可单独构建发布：`uv build --package wiley-agent`。
+- `packages/wiley-agent`：大而全的 agent 应用核心（UI 无关）——provider（契约 + 内置 `AnthropicProvider`）、内置工具集（`bash`、`grep`、`read`/`edit`/`write`，auto-scan 组成 `DEFAULT_TOOLS`）、config.toml 解析、agent 循环、会话持久化、system prompt 组装、MCP client、debug。`bootstrap(session_id, config_path=...)` 读 config.toml 返回就绪 agent；需要自定义 provider/工具时用 `create_agent(provider=..., tools=...)`。可单独构建发布：`uv build --package wiley-agent`。
 - `packages/wiley-tui`：纯展示的 Textual TUI 前端 + 薄启动入口，单向依赖 `wiley_agent` 的公开 API：`render.py` 把 agent 层记录/事件渲染成 Markdown，`app.py` 是界面组件，`main.py` 只做 argparse + `bootstrap()` + 启动界面。
 
 运行测试（覆盖两个包）：
