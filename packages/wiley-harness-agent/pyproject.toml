@@ -1,0 +1,19 @@
+[project]
+name = "wiley-harness-agent"
+version = "0.1.0"
+description = "A minimal Codex CLI-inspired agent TUI implemented in Python."
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=8.2.8",
+    "wiley-agent",
+]
+
+[project.scripts]
+wiley-harness-agent = "wiley_harness_agent.app:main"
+
+[tool.uv.sources]
+wiley-agent = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"

@@ -9,6 +9,19 @@
 
 依赖和虚拟环境由 `uv` 管理，终端界面使用 Textual 构建。
 
+## 项目结构
+
+仓库是 uv workspace，包含两个独立的包：
+
+- `packages/wiley-agent`：UI 无关的 agent harness 库（LLM provider、agent 循环、工具、会话持久化、system prompt 组装、MCP client）。可以单独构建发布：`uv build --package wiley-agent`；其他项目安装后 `from wiley_agent import create_agent` 即可使用，配置、会话目录、工具集均可通过参数注入。
+- `packages/wiley-harness-agent`：Textual TUI 应用，依赖 `wiley_agent` 的公开 API。
+
+运行测试（覆盖两个包）：
+
+```bash
+uv run pytest
+```
+
 ## 配置
 
 复制配置模板并填写 Anthropic API Key、Base URL 和模型名称：
