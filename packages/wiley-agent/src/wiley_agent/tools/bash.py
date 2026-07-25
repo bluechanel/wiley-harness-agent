@@ -131,8 +131,8 @@ class BashSession:
         """Stop the shell and every process it started."""
         try:
             os.killpg(self._process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        except (PermissionError, ProcessLookupError):
+            pass  # group already gone: macOS reports EPERM for a zombie-only group, Linux ESRCH
         self._process.wait()
 
 

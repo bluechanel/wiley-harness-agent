@@ -1,4 +1,8 @@
-"""Provider contract used by the agent service."""
+"""Provider contract used by the agent service.
+
+`wiley_agent` 只定义约定：宿主项目按本模块的契约实现自己的模型请求方法，
+并返回 `wiley_agent.provider.events` 中定义的 provider 中立事件。
+"""
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -12,37 +16,43 @@ class ProviderError(RuntimeError):
 
 
 class BaseProvider(ABC):
-    """Minimal asynchronous provider contract."""
+    """Asynchronous streaming-model contract implemented by library consumers.
 
-    def __init__(self, *, api_key: str, base_url: str) -> None:
-        self._api_key = api_key.strip()
-        self._base_url = base_url.strip().rstrip("/")
-        if not self._api_key:
-            raise ProviderError(f"{type(self).__name__} API key is empty.")
-        if not self._base_url:
-            raise ProviderError(f"{type(self).__name__} base URL is empty.")
+    实现方义务（这段 docstring 即约定本体）：
 
-    def get_base_url(self) -> str:
-        """Return the provider API base URL."""
-        return self._base_url
+    - 厂商参数全部在实现类构造期注入（模型名、max_tokens、thinking、
+      鉴权、endpoint、temperature……），`stream_request` 的签名固定不变，
+      只接收逐轮变化的会话状态。
+    - **输入**：`messages` 使用 Anthropic 风格的中立块 schema——assistant
+      内容块为 `thinking{thinking, signature}` / `redacted_thinking{data}` /
+      `text{text}` / `tool_use{id, name, input, caller?}`；工具结果以 user
+      消息携带 `{type: "tool_result", tool_use_id, content, is_error?}` 块。
+      非 Anthropic 后端由实现自行完成两侧格式翻译。`system` 为组装完成的
+      系统提示串或 None；`tools` 为 `{name, description, input_schema}`
+      字典列表或 None。
+    - **输出事件语义**（harness 的 agent 循环依赖这些约定）：
+      * `ToolCall` 按 `index` 流式拼装——某 index 的首个事件携带
+        `tool_call_id` / `name`（及可选 `caller`），后续同 index 事件携带
+        `input_json` 增量，由 harness 串接成完整入参；
+      * `UsageEvent.stop_reason` 在模型请求执行工具时必须映射为
+        `"tool_use"`（驱动工具循环），其他取值视为回合结束；同一轮内
+        多个 `UsageEvent` 的用量分量会被 harness 累加；
+      * `ErrorEvent` 表示流内厂商错误，harness 收到即抛 `ProviderError`
+        中止本轮；`DoneEvent` 为回合终止标记；
+      * 传输 / 解码失败必须 raise `ProviderError`。
+    """
 
-    def get_api_key(self) -> str:
-        """Return the API key used for authentication."""
-        return self._api_key
+    @property
+    def model(self) -> str:
+        """Model identity for prompts and telemetry; empty string means unknown."""
+        return ""
 
     @abstractmethod
     def stream_request(
         self,
         messages: list[dict[str, Any]],
-        **params: Any,
+        *,
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
-        """Run one streaming request and decode the vendor SSE stream.
-
-        Implementations must override this with `messages` required and every
-        vendor-supported request parameter declared explicitly as a
-        keyword-only argument — no opaque option pass-through, so an unknown
-        parameter fails with TypeError at the call site. Parameter values are
-        still decided by the caller (`AgentService._request_options`);
-        providers add transport details (endpoint, headers, stream flag) and
-        translate vendor events into the provider-neutral types.
-        """
+        """Run one streaming request and yield provider-neutral events."""

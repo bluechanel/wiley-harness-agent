@@ -12,3 +12,4 @@ build/
 .DS_Store
 config.toml
 sessions/
+.agent_session/

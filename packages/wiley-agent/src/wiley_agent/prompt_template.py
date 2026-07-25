@@ -10,8 +10,6 @@ from datetime import date
 from pathlib import Path
 import platform
 
-from wiley_agent.config import AnthropicConfig
-
 
 class BasePromptProvider(ABC):
     """Contract for one system prompt section."""
@@ -130,13 +128,13 @@ class MemoryProvider(BasePromptProvider):
 
 
 def default_prompt_providers(
-    config: AnthropicConfig,
+    model: str = "",
     workspace: Path | None = None,
 ) -> tuple[BasePromptProvider, ...]:
     """Assemble the default provider chain used by `create_agent`."""
     root = (workspace or Path.cwd()).expanduser()
     return (
-        ModelProvider(config.model),
+        ModelProvider(model),
         WorkspaceProvider(root),
         AgentMDProvider(root),
         SkillProvider(root / "skills"),

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from wiley_agent.config import AnthropicConfig
 from wiley_agent.prompt_template import (
     AgentMDProvider,
     BasePromptProvider,
@@ -115,10 +114,7 @@ def test_unreadable_file_returns_none(tmp_path: Path) -> None:
 
 
 def test_default_prompt_providers_order(tmp_path: Path) -> None:
-    config = AnthropicConfig(
-        api_key="key", base_url="https://example.com", model="model-x"
-    )
-    providers = default_prompt_providers(config, tmp_path)
+    providers = default_prompt_providers("model-x", tmp_path)
     assert [type(provider) for provider in providers] == [
         ModelProvider,
         WorkspaceProvider,

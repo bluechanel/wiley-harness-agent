@@ -7,5 +7,5 @@ dev = ["pytest>=8.0"]
 [tool.pytest.ini_options]
 testpaths = [
     "packages/wiley-agent/tests",
-    "packages/wiley-harness-agent/tests",
+    "packages/wiley-tui/tests",
 ]

@@ -4,12 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from wiley_agent.config import (
-    AnthropicConfig,
-    ConfigError,
-    DebugConfig,
-    load_debug_config,
-)
 from wiley_agent.debug import DebugRecorder
 from wiley_agent.provider import (
     DoneEvent,
@@ -22,15 +16,6 @@ from wiley_agent.provider import (
 )
 from wiley_agent.service import AgentService
 from wiley_agent.tools import Tool
-
-
-def _config() -> AnthropicConfig:
-    return AnthropicConfig(
-        api_key="key",
-        base_url="https://example.com",
-        model="model",
-        thinking_budget_tokens=0,
-    )
 
 
 def _read_records(path: Path) -> list[dict]:
@@ -46,10 +31,8 @@ def test_debug_recorder_appends_readable_jsonl(tmp_path: Path) -> None:
     recorder = DebugRecorder(path)
     recorder.record_session_start(
         session_id="sid",
+        provider="AnthropicProvider",
         model="m",
-        base_url="https://example.com",
-        max_tokens=10,
-        thinking_budget_tokens=0,
     )
     recorder.record_tool_call(
         turn=1,
@@ -116,12 +99,11 @@ def test_agent_stream_records_full_tool_round(tmp_path: Path) -> None:
     )
     path = tmp_path / "trace.debug.jsonl"
     agent = AgentService(
-        _config(),
+        Provider(),  # type: ignore[arg-type]
         instruction="be brief",
         tools=(echo,),
         debug_recorder=DebugRecorder(path),
     )
-    agent._provider = Provider()  # type: ignore[assignment]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]
@@ -148,8 +130,8 @@ def test_agent_stream_records_full_tool_round(tmp_path: Path) -> None:
     assert first_request["turn"] == 1
     assert first_request["round"] == 1
     body = first_request["body"]
-    assert body["model"] == "model"
-    assert body["stream"] is True
+    # 请求体只含 harness 视角的会话状态；厂商参数在 provider 实现内部。
+    assert set(body) == {"system", "tools", "messages"}
     assert body["system"] == "be brief"
     assert body["tools"][0]["name"] == "echo"
     assert body["messages"] == [{"role": "user", "content": "hello"}]
@@ -189,8 +171,7 @@ def test_agent_stream_records_provider_error(tmp_path: Path) -> None:
             yield ErrorEvent("boom", "overloaded_error")
 
     path = tmp_path / "trace.debug.jsonl"
-    agent = AgentService(_config(), debug_recorder=DebugRecorder(path))
-    agent._provider = Provider()  # type: ignore[assignment]
+    agent = AgentService(Provider(), debug_recorder=DebugRecorder(path))  # type: ignore[arg-type]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]
@@ -208,23 +189,3 @@ def test_agent_stream_records_provider_error(tmp_path: Path) -> None:
     assert records[2]["event"]["kind"] == "error"
     assert records[3]["error_type"] == "ProviderError"
     assert "boom" in records[3]["message"]
-
-
-def test_load_debug_config_reads_enabled_flag(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text("[debug]\nenabled = true\n", encoding="utf-8")
-    assert load_debug_config(config_path) == DebugConfig(enabled=True)
-
-
-def test_load_debug_config_defaults_to_disabled(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text('[anthropic]\napi_key = "k"\n', encoding="utf-8")
-    assert load_debug_config(config_path) == DebugConfig(enabled=False)
-    assert load_debug_config(tmp_path / "missing.toml") == DebugConfig(enabled=False)
-
-
-def test_load_debug_config_rejects_non_boolean(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text('[debug]\nenabled = "yes"\n', encoding="utf-8")
-    with pytest.raises(ConfigError):
-        load_debug_config(config_path)

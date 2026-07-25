@@ -1,4 +1,8 @@
-"""Anthropic Messages API over asynchronous HTTP, without the Anthropic SDK."""
+"""Anthropic Messages API 的内置 provider 实现（aiohttp，无 SDK）。
+
+厂商参数（api_key、base_url、model、max_tokens、thinking 预算）全部在构造期
+注入；`stream_request` 只接收 harness 传来的会话状态并产出中立事件。
+"""
 
 import asyncio
 import json
@@ -33,52 +37,53 @@ class AnthropicProvider(BaseProvider):
         sock_read=300,
     )
 
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        max_tokens: int = 8192,
+        thinking_budget_tokens: int = 4096,
+    ) -> None:
+        self._api_key = api_key.strip()
+        self._base_url = base_url.strip().rstrip("/")
+        self._model = model.strip()
+        self._max_tokens = max_tokens
+        self._thinking_budget_tokens = thinking_budget_tokens
+        if not self._api_key:
+            raise ProviderError(f"{type(self).__name__} API key is empty.")
+        if not self._base_url:
+            raise ProviderError(f"{type(self).__name__} base URL is empty.")
+        if not self._model:
+            raise ProviderError(f"{type(self).__name__} model is empty.")
+
+    @property
+    def model(self) -> str:
+        return self._model
+
     async def stream_request(
         self,
         messages: list[dict[str, Any]],
         *,
-        model: str,
-        max_tokens: int,
-        cache_control: dict[str, Any] | None = None,
-        container: str | None = None,
-        inference_geo: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        output_config: dict[str, Any] | None = None,
-        service_tier: str | None = None,
-        stop_sequences: list[str] | None = None,
-        system: str | list[dict[str, Any]] | None = None,
-        temperature: float | None = None,
-        thinking: dict[str, Any] | None = None,
-        tool_choice: dict[str, Any] | None = None,
+        system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
-        top_k: int | None = None,
-        top_p: float | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         body: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
+            "model": self._model,
+            "max_tokens": self._max_tokens,
             "messages": messages,
             "stream": True,
         }
-        optional_fields = {
-            "cache_control": cache_control,
-            "container": container,
-            "inference_geo": inference_geo,
-            "metadata": metadata,
-            "output_config": output_config,
-            "service_tier": service_tier,
-            "stop_sequences": stop_sequences,
-            "system": system,
-            "temperature": temperature,
-            "thinking": thinking,
-            "tool_choice": tool_choice,
-            "tools": tools,
-            "top_k": top_k,
-            "top_p": top_p,
-        }
-        body.update(
-            {name: value for name, value in optional_fields.items() if value is not None}
-        )
+        if self._thinking_budget_tokens:
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget_tokens,
+            }
+        if system is not None:
+            body["system"] = system
+        if tools is not None:
+            body["tools"] = tools
 
         try:
             async with aiohttp.ClientSession(timeout=self._timeout) as session:

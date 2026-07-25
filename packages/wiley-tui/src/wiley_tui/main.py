@@ -1,15 +1,15 @@
-"""Application entry point: create the agent via its factory and launch the TUI."""
+"""Application entry point: bootstrap the agent, then launch the TUI."""
 
 import argparse
 from collections.abc import Sequence
 
-from wiley_agent import ConfigError, SessionError, create_agent
-from wiley_harness_agent.tui import ChatApp
+from wiley_agent import ConfigError, ProviderError, SessionError, bootstrap
+from wiley_tui.app import ChatApp
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Build and start the application."""
-    parser = argparse.ArgumentParser(description="Wiley Harness Agent")
+    """Assemble via the agent package and start the display."""
+    parser = argparse.ArgumentParser(description="Wiley Agent TUI")
     parser.add_argument(
         "session_id",
         nargs="?",
@@ -18,8 +18,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     try:
-        agent = create_agent(args.session_id)
-    except (ConfigError, SessionError) as exc:
+        agent = bootstrap(args.session_id)
+    except (ConfigError, ProviderError, SessionError) as exc:
         print(f"启动失败：{exc}")
         return
 

@@ -1,4 +1,5 @@
-from wiley_agent.tools import DEFAULT_TOOLS, Tool
+from wiley_agent import Tool
+from wiley_agent.tools import DEFAULT_TOOLS
 from wiley_agent.tools.bash import BASH
 from wiley_agent.tools.text_editor import TEXT_EDITOR
 

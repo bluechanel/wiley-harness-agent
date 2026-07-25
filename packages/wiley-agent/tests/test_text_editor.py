@@ -75,4 +75,3 @@ def test_insert_uses_one_based_line_numbers(tmp_path: Path) -> None:
     )
 
     assert path.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
-

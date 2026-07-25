@@ -4,13 +4,13 @@ from pathlib import Path
 import tomllib
 
 
-def _resolve_config_path(path: Path | None) -> Path:
-    """Default to config.toml in the caller's current working directory."""
-    return path if path is not None else Path.cwd() / "config.toml"
-
-
 class ConfigError(RuntimeError):
     """Raised when the application configuration cannot be loaded."""
+
+
+@dataclass(frozen=True, slots=True)
+class DebugConfig:
+    enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,25 +22,9 @@ class AnthropicConfig:
     thinking_budget_tokens: int = 4096
 
 
-@dataclass(frozen=True, slots=True)
-class DebugConfig:
-    enabled: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class MCPServerConfig:
-    name: str
-    transport: str  # "stdio" | "http"
-    command: str = ""  # stdio 必填
-    args: tuple[str, ...] = ()
-    env: Mapping[str, str] = field(default_factory=dict)
-    url: str = ""  # http 必填
-    headers: Mapping[str, str] = field(default_factory=dict)
-
-
 def load_config(path: Path | None = None) -> AnthropicConfig:
-    """Load and validate the local Anthropic configuration."""
-    path = _resolve_config_path(path)
+    """Load and validate the [anthropic] section of config.toml."""
+    path = path if path is not None else Path.cwd() / "config.toml"
     try:
         with path.open("rb") as config_file:
             config = tomllib.load(config_file)
@@ -56,11 +40,11 @@ def load_config(path: Path | None = None) -> AnthropicConfig:
         raise ConfigError("配置文件缺少 [anthropic] 配置段。")
 
     values: dict[str, str] = {}
-    for field in ("api_key", "base_url", "model"):
-        value = anthropic_config.get(field)
+    for field_name in ("api_key", "base_url", "model"):
+        value = anthropic_config.get(field_name)
         if not isinstance(value, str) or not value.strip():
-            raise ConfigError(f"配置项 anthropic.{field} 不能为空。")
-        values[field] = value.strip()
+            raise ConfigError(f"配置项 anthropic.{field_name} 不能为空。")
+        values[field_name] = value.strip()
 
     if values["api_key"] == "your-api-key":
         raise ConfigError("请先在 config.toml 中填写真实的 anthropic.api_key。")
@@ -91,7 +75,7 @@ def load_config(path: Path | None = None) -> AnthropicConfig:
 
 def load_debug_config(path: Path | None = None) -> DebugConfig:
     """Load the optional [debug] section; missing file/section means disabled."""
-    path = _resolve_config_path(path)
+    path = path if path is not None else Path.cwd() / "config.toml"
     try:
         with path.open("rb") as config_file:
             config = tomllib.load(config_file)
@@ -106,6 +90,17 @@ def load_debug_config(path: Path | None = None) -> DebugConfig:
     if not isinstance(enabled, bool):
         raise ConfigError("配置项 debug.enabled 必须是布尔值。")
     return DebugConfig(enabled=enabled)
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerConfig:
+    name: str
+    transport: str  # "stdio" | "http"
+    command: str = ""  # stdio 必填
+    args: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+    url: str = ""  # http 必填
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 def _parse_str_table(raw: object, label: str) -> dict[str, str]:
@@ -154,14 +149,20 @@ def _parse_mcp_server(raw: object, index: int) -> MCPServerConfig:
     )
 
 
-def load_mcp_config(path: Path | None = None) -> tuple[MCPServerConfig, ...]:
-    """Load the optional [[mcp.servers]] tables; missing file/section means none."""
-    path = _resolve_config_path(path)
+def load_mcp_config(path: Path) -> tuple[MCPServerConfig, ...]:
+    """Parse the [[mcp.servers]] tables from a TOML MCP config file.
+
+    The file must exist and parse; a file without an [mcp] section configures
+    no servers (the same file may hold unrelated sections, e.g. the host's
+    config.toml).
+    """
     try:
         with path.open("rb") as config_file:
             config = tomllib.load(config_file)
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
-        return ()
+    except FileNotFoundError as exc:
+        raise ConfigError(f"MCP 配置文件不存在：{path}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"MCP 配置文件解析失败：{path}（{exc}）") from exc
 
     mcp_config = config.get("mcp")
     if not isinstance(mcp_config, dict):

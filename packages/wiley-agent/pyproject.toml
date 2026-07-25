@@ -1,7 +1,7 @@
 [project]
 name = "wiley-agent"
 version = "0.1.0"
-description = "UI-agnostic agent harness: provider-neutral LLM loop, tools, sessions, prompt assembly, and MCP."
+description = "All-in-one agent core: provider, tools, config, harness, sessions, and MCP (UI-agnostic)."
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.12.0",

@@ -4,10 +4,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator, Literal
 
-from wiley_agent.config import AnthropicConfig
 from wiley_agent.debug import DebugRecorder
 from wiley_agent.provider import (
-    AnthropicProvider,
+    BaseProvider,
     DoneEvent,
     ErrorEvent,
     ProviderError,
@@ -49,7 +48,7 @@ class AgentService:
 
     def __init__(
         self,
-        config: AnthropicConfig,
+        provider: BaseProvider,
         *,
         instruction: str | None = None,
         tools: Sequence[Tool] = (),
@@ -58,10 +57,7 @@ class AgentService:
         total_usage: ChatUsage | None = None,
         debug_recorder: DebugRecorder | None = None,
     ) -> None:
-        self._provider = AnthropicProvider(api_key=config.api_key, base_url=config.base_url)
-        self._model = config.model
-        self._max_tokens = config.max_tokens
-        self._thinking_budget_tokens = config.thinking_budget_tokens
+        self._provider = provider
         self._tools = tuple(tools)
         self._tools_by_name = {tool.name: tool for tool in self._tools}
         self._system_prompt = build_prompt(instruction, prompt_providers)
@@ -111,7 +107,6 @@ class AgentService:
                             body={
                                 **request_options,
                                 "messages": self._messages,
-                                "stream": True,
                             },
                         )
                     response_stream = self._provider.stream_request(
@@ -268,16 +263,8 @@ class AgentService:
                 raise
 
     def _request_options(self) -> dict[str, Any]:
-        """Assemble request parameter values for the provider's explicit params."""
-        options: dict[str, Any] = {
-            "model": self._model,
-            "max_tokens": self._max_tokens,
-        }
-        if self._thinking_budget_tokens:
-            options["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": self._thinking_budget_tokens,
-            }
+        """Assemble the per-turn conversation state passed to the provider."""
+        options: dict[str, Any] = {}
         if self._system_prompt:
             options["system"] = self._system_prompt
         if self._tools:

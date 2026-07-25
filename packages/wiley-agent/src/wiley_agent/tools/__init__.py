@@ -1,8 +1,11 @@
-"""Agent base tools.
+"""Built-in tools and the ``Tool`` contract.
 
-Every submodule in this package defines its tool as a module-level ``Tool``
-instance; ``DEFAULT_TOOLS`` discovers and loads all of them automatically, so
-adding a tool means adding a submodule — no registration list to maintain.
+``base.py`` defines the contract: a ``Tool`` bundles the model-facing API
+schema with a local executor. Every other submodule in this package defines a
+built-in tool as a module-level ``Tool`` instance; ``DEFAULT_TOOLS`` discovers
+and loads all of them automatically, so adding a tool means adding a
+submodule — no registration list to maintain. Custom tools implement the same
+contract and are injected via ``create_agent(tools=...)``.
 """
 
 import importlib

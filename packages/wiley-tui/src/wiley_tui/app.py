@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Collapsible, Footer, Header, Input, Markdown, Static
 
 from wiley_agent import ChatStreamEvent, ChatUsage, SessionRecord
-import wiley_harness_agent.tui.render as render
+import wiley_tui.render as render
 
 
 class ChatBackend(Protocol):

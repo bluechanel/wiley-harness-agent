@@ -23,18 +23,14 @@ class DebugRecorder:
         self,
         *,
         session_id: str,
+        provider: str,
         model: str,
-        base_url: str,
-        max_tokens: int,
-        thinking_budget_tokens: int,
     ) -> None:
         self._append(
             "session_start",
             session_id=session_id,
+            provider=provider,
             model=model,
-            base_url=base_url,
-            max_tokens=max_tokens,
-            thinking_budget_tokens=thinking_budget_tokens,
         )
 
     def record_request(

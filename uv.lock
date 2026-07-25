@@ -11,7 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "wiley-agent",
-    "wiley-harness-agent",
+    "wiley-tui",
 ]
 
 [manifest.dependency-groups]
@@ -1224,9 +1224,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "wiley-harness-agent"
+name = "wiley-tui"
 version = "0.1.0"
-source = { editable = "packages/wiley-harness-agent" }
+source = { editable = "packages/wiley-tui" }
 dependencies = [
     { name = "textual" },
     { name = "wiley-agent" },

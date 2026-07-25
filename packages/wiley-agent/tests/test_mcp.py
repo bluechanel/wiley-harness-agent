@@ -1,4 +1,4 @@
-"""Tests for the MCP client: config parsing, tool bridging, lifecycle."""
+"""Tests for the MCP client: config parsing, tool bridging, lifecycle, factory wiring."""
 
 import sys
 import textwrap
@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from wiley_agent import BaseProvider, DebugConfig, create_agent
 from wiley_agent.config import (
     ConfigError,
     MCPServerConfig,
@@ -26,11 +27,15 @@ def _write_config(tmp_path: Path, body: str) -> Path:
     return config_path
 
 
-def test_load_mcp_config_missing_file_or_section_means_no_servers(
-    tmp_path: Path,
-) -> None:
-    assert load_mcp_config(tmp_path / "absent.toml") == ()
+def test_load_mcp_config_missing_section_means_no_servers(tmp_path: Path) -> None:
     assert load_mcp_config(_write_config(tmp_path, "[debug]\nenabled = true\n")) == ()
+
+
+def test_load_mcp_config_missing_or_broken_file_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        load_mcp_config(tmp_path / "absent.toml")
+    with pytest.raises(ConfigError):
+        load_mcp_config(_write_config(tmp_path, "[mcp\n"))
 
 
 def test_load_mcp_config_parses_stdio_and_http_servers(tmp_path: Path) -> None:
@@ -205,3 +210,51 @@ def test_manager_skips_unreachable_server_without_raising() -> None:
         assert mgr.tools == ()
     finally:
         mgr.close()
+
+
+# --- create_agent wiring ---
+
+
+class _StubProvider(BaseProvider):
+    async def stream_request(self, messages, *, system=None, tools=None):
+        raise AssertionError("provider should not be called in these tests")
+        yield  # unreachable: marks this method as an async generator
+
+
+def test_create_agent_converts_mcp_config_servers_into_tools(tmp_path: Path) -> None:
+    script_path = tmp_path / "server.py"
+    script_path.write_text(_SERVER_SCRIPT, encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        f"""
+        [[mcp.servers]]
+        name = "demo"
+        transport = "stdio"
+        command = "{sys.executable}"
+        args = ["{script_path}"]
+        """,
+    )
+
+    agent = create_agent(
+        provider=_StubProvider(),
+        tools=(),
+        mcp_config=config_path,
+        sessions_dir=tmp_path / "sessions",
+        debug_config=DebugConfig(),
+    )
+    try:
+        tool_names = {tool.name for tool in agent._agent._tools}
+        assert tool_names == {"mcp__demo__add", "mcp__demo__boom"}
+    finally:
+        agent.close()
+
+
+def test_create_agent_rejects_missing_mcp_config_file(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        create_agent(
+            provider=_StubProvider(),
+            tools=(),
+            mcp_config=tmp_path / "absent.toml",
+            sessions_dir=tmp_path / "sessions",
+            debug_config=DebugConfig(),
+        )

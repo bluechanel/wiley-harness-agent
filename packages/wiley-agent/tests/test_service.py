@@ -1,7 +1,6 @@
 import asyncio
 import copy
 
-from wiley_agent.config import AnthropicConfig
 from wiley_agent.provider import (
     DoneEvent,
     ProviderUsage,
@@ -15,15 +14,6 @@ from wiley_agent.service import AgentService
 from wiley_agent.tools import Tool
 
 
-def _config() -> AnthropicConfig:
-    return AnthropicConfig(
-        api_key="key",
-        base_url="https://example.com",
-        model="model",
-        thinking_budget_tokens=0,
-    )
-
-
 def test_agent_stream_accumulates_new_content_blocks() -> None:
     class Provider:
         async def stream_request(self, messages, **options):
@@ -35,8 +25,7 @@ def test_agent_stream_accumulates_new_content_blocks() -> None:
             )
             yield DoneEvent()
 
-    agent = AgentService(_config())
-    agent._provider = Provider()  # type: ignore[assignment]
+    agent = AgentService(Provider())  # type: ignore[arg-type]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]
@@ -90,8 +79,7 @@ def test_agent_service_runs_registered_tools() -> None:
         },
         execute=run_echo,
     )
-    agent = AgentService(_config(), instruction="be brief", tools=(echo,))
-    agent._provider = Provider()  # type: ignore[assignment]
+    agent = AgentService(Provider(), instruction="be brief", tools=(echo,))  # type: ignore[arg-type]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]
@@ -121,9 +109,8 @@ def test_agent_service_runs_registered_tools() -> None:
     # 上下文取最后一轮请求（仅 output_tokens=1），而非整轮累加值。
     assert usage_event.context_tokens == 1
     options = requests[0]["options"]
-    assert options["model"] == "model"
-    assert options["max_tokens"] == 8192
-    assert "thinking" not in options
+    # 契约签名只携带会话状态；厂商参数(model/max_tokens/thinking)由实现自持。
+    assert set(options) == {"system", "tools"}
     assert options["system"] == "be brief"
     assert options["tools"] == [
         {
@@ -154,8 +141,7 @@ def test_agent_service_reports_unknown_tool_as_error_result() -> None:
                 yield UsageEvent(ProviderUsage(), stop_reason="end_turn")
             yield DoneEvent()
 
-    agent = AgentService(_config())
-    agent._provider = Provider()  # type: ignore[assignment]
+    agent = AgentService(Provider())  # type: ignore[arg-type]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]
@@ -188,9 +174,10 @@ def test_agent_service_composes_system_prompt_from_providers() -> None:
             return "# Extra\n\nsection"
 
     agent = AgentService(
-        _config(), instruction="be brief", prompt_providers=(Section(),)
+        Provider(),  # type: ignore[arg-type]
+        instruction="be brief",
+        prompt_providers=(Section(),),
     )
-    agent._provider = Provider()  # type: ignore[assignment]
 
     async def collect_events():
         return [event async for event in agent.stream("hello")]

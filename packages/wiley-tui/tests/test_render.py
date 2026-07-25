@@ -1,5 +1,5 @@
 from wiley_agent import ChatUsage, SessionRecord
-from wiley_harness_agent.tui import render
+from wiley_tui import render
 
 
 def _record(role, content, *, kind=None, metadata=None) -> SessionRecord:

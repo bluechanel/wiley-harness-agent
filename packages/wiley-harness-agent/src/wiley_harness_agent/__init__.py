@@ -1,2 +1,0 @@
-"""Wiley Harness Agent package."""
-

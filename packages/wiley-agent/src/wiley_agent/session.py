@@ -59,7 +59,7 @@ class SessionStore:
         *,
         sessions_dir: Path | None = None,
     ) -> None:
-        sessions_dir = sessions_dir if sessions_dir is not None else Path.cwd() / "sessions"
+        sessions_dir = sessions_dir if sessions_dir is not None else Path.cwd() / ".agent_session"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self.session_id = _normalize_session_id(session_id) if session_id else str(uuid4())
         self.path = sessions_dir / f"{self.session_id}.jsonl"

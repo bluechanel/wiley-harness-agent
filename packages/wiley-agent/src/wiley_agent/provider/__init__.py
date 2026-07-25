@@ -1,4 +1,4 @@
-"""LLM provider implementations."""
+"""Provider contract, neutral streaming events, and built-in implementations."""
 
 from wiley_agent.provider.anthropic import AnthropicProvider
 from wiley_agent.provider.base import BaseProvider, ProviderError
