@@ -1,20 +1,21 @@
-"""Anthropic Messages API 的 Model 实现(aiohttp 直连,无 SDK)。
+"""Anthropic Messages API 的 Model 实现(官方 anthropic SDK)。
 
 厂商参数(api_key、base_url、model、max_tokens、thinking 预算)全部在
 构造期注入。按 wy-core 契约:``stream`` 边收边产出 TextDelta/ThinkingDelta
-增量,流结束时在实现内把厂商 SSE 事件组装为完整 assistant 消息,以一个
-``ModelEnd`` 交付;传输/解码/流内厂商错误一律 raise ``ModelError``。
+增量,SSE 解析、内容块累积与重试由 SDK 的流式 helper 完成,流末把 SDK
+的最终消息翻译为 wy-core assistant 消息,以一个 ``ModelEnd`` 交付;
+传输/解码/流内厂商错误一律 raise ``ModelError``。
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-import aiohttp
+from anthropic import AsyncAnthropic
+from anthropic.types import Message as AnthropicMessage
+from anthropic.types import Usage as AnthropicUsage
 
 from wy_core import (
     Message,
@@ -32,6 +33,8 @@ from wy_core import (
     Usage,
 )
 
+_MESSAGES_SUFFIX = "/v1/messages"
+
 
 @dataclass
 class RedactedThinkingBlock:
@@ -42,14 +45,7 @@ class RedactedThinkingBlock:
 
 
 class AnthropicModel(Model):
-    """aiohttp implementation of Anthropic's Messages API."""
-
-    _timeout = aiohttp.ClientTimeout(
-        total=None,
-        connect=30,
-        sock_connect=30,
-        sock_read=300,
-    )
+    """Official anthropic SDK implementation of Anthropic's Messages API."""
 
     def __init__(
         self,
@@ -61,7 +57,11 @@ class AnthropicModel(Model):
         thinking_budget_tokens: int = 4096,
     ) -> None:
         self._api_key = api_key.strip()
-        self._base_url = base_url.strip().rstrip("/")
+        base = base_url.strip().rstrip("/")
+        # 兼容旧配置:base_url 允许填完整 messages endpoint,SDK 只收根地址。
+        if base.endswith(_MESSAGES_SUFFIX):
+            base = base[: -len(_MESSAGES_SUFFIX)]
+        self._base_url = base
         self._max_tokens = max_tokens
         self._thinking_budget_tokens = thinking_budget_tokens
         self.name = model.strip()
@@ -79,21 +79,20 @@ class AnthropicModel(Model):
         system: str | None = None,
         tools: Sequence[Tool] | None = None,
     ) -> AsyncIterator[ModelEvent]:
-        body: dict[str, Any] = {
+        params: dict[str, Any] = {
             "model": self.name,
             "max_tokens": self._max_tokens,
             "messages": [_message_to_wire(message) for message in messages],
-            "stream": True,
         }
         if self._thinking_budget_tokens:
-            body["thinking"] = {
+            params["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": self._thinking_budget_tokens,
             }
         if system is not None:
-            body["system"] = system
+            params["system"] = system
         if tools is not None:
-            body["tools"] = [
+            params["tools"] = [
                 {
                     "name": tool.name,
                     "description": tool.description,
@@ -102,173 +101,56 @@ class AnthropicModel(Model):
                 for tool in tools
             ]
 
-        # 组装状态:按 index 累积 wire 形态的内容块与工具参数 JSON 片段。
-        blocks: dict[int, dict[str, Any]] = {}
-        json_parts: dict[int, list[str]] = {}
-        usage = Usage()
-        stop_reason: str | None = None
-
         try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as http:
-                async with http.post(
-                    self._messages_url,
-                    json=body,
-                    headers=self._headers(),
-                ) as response:
-                    await self._raise_for_status(response)
-                    async for event in _sse_events(response):
-                        event_type = event.get("type")
-                        if event_type == "error":
-                            error = event.get("error", {})
-                            raise ModelError(
-                                str(error.get("message", "Anthropic returned an error"))
-                            )
-                        if event_type == "message_start":
-                            usage.add(
-                                _usage_from(event.get("message", {}).get("usage", {}))
-                            )
-                        elif event_type == "message_delta":
-                            usage.add(_usage_from(event.get("usage", {})))
-                            stop_reason = (
-                                event.get("delta", {}).get("stop_reason") or stop_reason
-                            )
-                        elif event_type == "content_block_start":
-                            index = int(event.get("index", 0))
-                            block = dict(event.get("content_block", {}))
-                            blocks[index] = block
-                            if block.get("type") == "text" and block.get("text"):
-                                yield TextDelta(str(block["text"]))
-                            if block.get("type") == "thinking" and block.get("thinking"):
-                                yield ThinkingDelta(str(block["thinking"]))
-                        elif event_type == "content_block_delta":
-                            index = int(event.get("index", 0))
-                            delta = event.get("delta", {})
-                            delta_type = delta.get("type")
-                            block = blocks.setdefault(index, {})
-                            if delta_type == "text_delta":
-                                text = str(delta.get("text", ""))
-                                block.setdefault("type", "text")
-                                block["text"] = str(block.get("text", "")) + text
-                                if text:
-                                    yield TextDelta(text)
-                            elif delta_type == "thinking_delta":
-                                thinking = str(delta.get("thinking", ""))
-                                block.setdefault("type", "thinking")
-                                block["thinking"] = (
-                                    str(block.get("thinking", "")) + thinking
-                                )
-                                if thinking:
-                                    yield ThinkingDelta(thinking)
-                            elif delta_type == "input_json_delta":
-                                json_parts.setdefault(index, []).append(
-                                    str(delta.get("partial_json", ""))
-                                )
-                            elif delta_type == "signature_delta":
-                                block["signature"] = str(block.get("signature", "")) + str(
-                                    delta.get("signature", "")
-                                )
+            async with AsyncAnthropic(
+                api_key=self._api_key, base_url=self._base_url
+            ) as client:
+                async with client.messages.stream(**params) as sdk_stream:
+                    async for event in sdk_stream:
+                        if event.type == "content_block_start":
+                            block = event.content_block
+                            if block.type == "text" and block.text:
+                                yield TextDelta(block.text)
+                            elif block.type == "thinking" and block.thinking:
+                                yield ThinkingDelta(block.thinking)
+                        elif event.type == "content_block_delta":
+                            delta = event.delta
+                            if delta.type == "text_delta" and delta.text:
+                                yield TextDelta(delta.text)
+                            elif delta.type == "thinking_delta" and delta.thinking:
+                                yield ThinkingDelta(delta.thinking)
+                    final = await sdk_stream.get_final_message()
         except ModelError:
             raise
-        except (
-            aiohttp.ClientError,
-            asyncio.TimeoutError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-        ) as exc:
+        except Exception as exc:
+            # SDK 管线的失败形态众多(AnthropicError 族、httpx 传输错误、
+            # 解码失败、残缺流的累积器断言),契约要求一律收敛为 ModelError。
             raise ModelError(f"Anthropic stream failed: {exc}") from exc
 
         yield ModelEnd(
-            message=_assemble(blocks, json_parts),
-            usage=usage,
-            stop_reason=stop_reason or "end_turn",
+            message=_from_sdk_message(final),
+            usage=_usage_from(final.usage),
+            stop_reason=final.stop_reason or "end_turn",
         )
 
-    @property
-    def _messages_url(self) -> str:
-        return (
-            self._base_url
-            if self._base_url.endswith("/messages")
-            else f"{self._base_url}/v1/messages"
-        )
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "content-type": "application/json",
-            "x-api-key": self._api_key,
-            "anthropic-version": "2023-06-01",
-            "accept": "text/event-stream",
-        }
-
-    @staticmethod
-    async def _raise_for_status(response: aiohttp.ClientResponse) -> None:
-        if response.status < 400:
-            return
-        detail = await response.text()
-        raise ModelError(f"Anthropic request failed ({response.status}): {detail}")
-
-
-async def _sse_events(
-    response: aiohttp.ClientResponse,
-) -> AsyncIterator[Mapping[str, Any]]:
-    """Yield decoded SSE data payloads; [DONE] and empty keep-alives are skipped."""
-    event_data: list[str] = []
-    async for raw_line in response.content:
-        line = raw_line.decode("utf-8").rstrip("\r\n")
-        if line.startswith("data:"):
-            event_data.append(line[5:].lstrip())
-        elif not line and event_data:
-            payload = _decode_event("\n".join(event_data))
-            event_data = []
-            if payload is not None:
-                yield payload
-    if event_data:
-        payload = _decode_event("\n".join(event_data))
-        if payload is not None:
-            yield payload
-
-
-def _decode_event(data: str) -> Mapping[str, Any] | None:
-    if data == "[DONE]":
-        return None
-    payload = json.loads(data)
-    if not isinstance(payload, dict):
-        raise ModelError("Anthropic SSE event must be a JSON object.")
-    return payload
-
-
-def _assemble(
-    blocks: Mapping[int, Mapping[str, Any]], json_parts: Mapping[int, list[str]]
-) -> Message:
-    """把累积的 wire 块组装为完整 assistant 消息(空文本块跳过)。"""
+def _from_sdk_message(message: AnthropicMessage) -> Message:
+    """SDK 最终消息 → wy-core assistant 消息(空文本块跳过,未知块忽略)。"""
     content: list[Any] = []
-    for index in sorted(blocks):
-        block = blocks[index]
-        block_type = block.get("type")
-        if block_type == "text":
-            text = str(block.get("text", ""))
-            if text:
-                content.append(TextBlock(text))
-        elif block_type == "thinking":
+    for block in message.content:
+        if block.type == "text":
+            if block.text:
+                content.append(TextBlock(block.text))
+        elif block.type == "thinking":
             content.append(
-                ThinkingBlock(
-                    thinking=str(block.get("thinking", "")),
-                    signature=str(block.get("signature", "")),
-                )
+                ThinkingBlock(thinking=block.thinking, signature=block.signature or "")
             )
-        elif block_type == "redacted_thinking":
-            content.append(RedactedThinkingBlock(data=str(block.get("data", ""))))
-        elif block_type == "tool_use":
-            raw = "".join(json_parts.get(index, ()))
-            try:
-                input_value = json.loads(raw) if raw.strip() else dict(block.get("input") or {})
-            except json.JSONDecodeError as exc:
-                raise ModelError(f"工具入参 JSON 解析失败: {exc}") from exc
+        elif block.type == "redacted_thinking":
+            content.append(RedactedThinkingBlock(data=block.data))
+        elif block.type == "tool_use":
+            input_value = block.input if isinstance(block.input, dict) else {}
             content.append(
-                ToolUseBlock(
-                    id=str(block.get("id", "")),
-                    name=str(block.get("name", "")),
-                    input=input_value,
-                )
+                ToolUseBlock(id=block.id, name=block.name, input=dict(input_value))
             )
     return Message(role="assistant", content=content)
 
@@ -310,14 +192,10 @@ def _message_to_wire(message: Message) -> dict[str, Any]:
     return {"role": message.role, "content": content}
 
 
-def _usage_from(value: Mapping[str, Any]) -> Usage:
+def _usage_from(usage: AnthropicUsage) -> Usage:
     return Usage(
-        input_tokens=_token_count(value.get("input_tokens")),
-        output_tokens=_token_count(value.get("output_tokens")),
-        cache_write_tokens=_token_count(value.get("cache_creation_input_tokens")),
-        cache_read_tokens=_token_count(value.get("cache_read_input_tokens")),
+        input_tokens=usage.input_tokens or 0,
+        output_tokens=usage.output_tokens or 0,
+        cache_write_tokens=usage.cache_creation_input_tokens or 0,
+        cache_read_tokens=usage.cache_read_input_tokens or 0,
     )
-
-
-def _token_count(value: Any) -> int:
-    return value if isinstance(value, int) and value >= 0 else 0

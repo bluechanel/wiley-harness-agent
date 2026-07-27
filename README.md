@@ -14,7 +14,7 @@
 仓库是 uv workspace，packages 分 core 与 app 两部分：
 
 - `packages/wy-core`：零依赖（纯标准库）的极简 agent core runtime 库——统一消息定义、`Tool`/`Model` 抽象父类、内存态 `Session` 与自动上下文压缩、默认开启的 JSONL 审计日志、`Agent` 循环。使用方依赖它、继承 `Model` 适配任意 LLM API、继承 `Tool` 增加工具，即得到完整 harness agent。可单独构建发布：`uv build --package wy-core`。
-- `packages/wy-coding-agent`：基于 wy-core 的编码 agent 应用——`AnthropicModel` 模型实现（aiohttp 直连 Messages API、无 SDK）、内置工具集（`bash`、`grep`、`read`/`edit`/`write`，auto-scan 组成 `DEFAULT_TOOLS`）、MCP client、config.toml 解析、system prompt 组装、会话持久化与 Textual TUI。`bootstrap(session_id, config_path=...)` 读 config.toml 返回就绪 agent；需要自定义模型/工具时用 `create_agent(model=..., tools=...)`。
+- `packages/wy-coding-agent`：基于 wy-core 的编码 agent 应用——`AnthropicModel` 模型实现（官方 anthropic SDK 流式接入）、内置工具集（`bash`、`grep`、`read`/`edit`/`write`，auto-scan 组成 `DEFAULT_TOOLS`）、MCP client、config.toml 解析、system prompt 组装、会话持久化与 Textual TUI。`bootstrap(session_id, config_path=...)` 读 config.toml 返回就绪 agent；需要自定义模型/工具时用 `create_agent(model=..., tools=...)`。
 
 运行测试（覆盖两个包）：
 

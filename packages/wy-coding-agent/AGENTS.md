@@ -8,7 +8,7 @@
 
 ## AnthropicModel
 
-- `anthropic.py` 的 `AnthropicModel` 实现 `wy_core.Model` 契约：aiohttp 直连 Anthropic Messages API、SSE 解析,厂商参数全在构造期。按 wy-core 的"实现方组装"取舍：流中只产出 `TextDelta`/`ThinkingDelta` 增量供渲染，同时在内部按 index 累积内容块与工具参数 JSON 片段，流末组装完整 assistant 消息（thinking 的 signature、tool_use 的入参都在此填好）交付 `ModelEnd`；`message_delta.stop_reason` 原样透传（`"tool_use"` 驱动工具循环）。流内 error 事件、HTTP 非 2xx、传输/解码失败一律 raise `ModelError`。`RedactedThinkingBlock` 是本模块定义的应用侧扩展块（wy-core 的块联合允许应用扩展，核心逐块 isinstance 判断、未知块原样携带），`_message_to_wire` 负责全部块类型与 wire 格式的双向翻译。thinking 预算为 0 时不发 thinking 字段。
+- `anthropic.py` 的 `AnthropicModel` 实现 `wy_core.Model` 契约：官方 anthropic SDK（`AsyncAnthropic`，每次 stream 新建、用毕关闭），厂商参数全在构造期；base_url 兼容旧配置填完整 `/v1/messages` endpoint（构造期剥掉后缀交给 SDK）。流中只产出 `TextDelta`/`ThinkingDelta` 增量供渲染（含 content_block_start 自带的初始文本），SSE 解析、内容块与工具入参 JSON 累积、429/5xx 重试由 SDK 流式 helper 完成，流末把 `get_final_message()` 翻译为 wy-core assistant 消息交付 `ModelEnd`；stop_reason 原样透传（`"tool_use"` 驱动工具循环，缺省补 `"end_turn"`）。SDK 管线的一切异常（AnthropicError 族、httpx 传输错误、残缺流的累积器断言）统一收敛 raise `ModelError`。`RedactedThinkingBlock` 是本模块定义的应用侧扩展块（wy-core 的块联合允许应用扩展，核心逐块 isinstance 判断、未知块原样携带），`_message_to_wire`/`_from_sdk_message` 负责全部块类型在 wy-core 与 SDK/wire 格式间的双向翻译。thinking 预算为 0 时不发 thinking 字段。测试经 `httpx.MockTransport` 注入罐装 SSE 走真实 SDK 管线（monkeypatch 模块内 `AsyncAnthropic` 符号），fixture 必须是规范 Anthropic 流：带 `event:` 行、`message_start` 打头、内容块先 start 再 delta。
 
 ## 工具体系
 
