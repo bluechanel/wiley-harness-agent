@@ -6,6 +6,6 @@ dev = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = [
-    "packages/wiley-agent/tests",
-    "packages/wiley-tui/tests",
+    "packages/wy-core/tests",
+    "packages/wy-coding-agent/tests",
 ]

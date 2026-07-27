@@ -1,4 +1,4 @@
-from wiley_tui.main import main
+from wy_coding_agent.main import main
 
 
 if __name__ == "__main__":

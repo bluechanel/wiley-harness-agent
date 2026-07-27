@@ -13,3 +13,4 @@ build/
 config.toml
 sessions/
 .agent_session/
+.wy_audit/

@@ -5,9 +5,10 @@ model = "claude-sonnet-4-5"
 max_tokens = 8192
 thinking_budget_tokens = 4096
 
-[debug]
-# 开启后记录每轮 LLM 请求/流事件/工具执行到 sessions/<session_id>.debug.jsonl
-enabled = false
+# 自动上下文压缩（可选）：上下文超过阈值时把较早历史总结为一条摘要。
+# [compaction]
+# max_context_tokens = 150000
+# keep_recent = 8
 
 # MCP server 配置（可选）：每个 [[mcp.servers]] 一个 server，
 # 其工具以 mcp__<name>__<tool> 名称并入 agent 工具集。

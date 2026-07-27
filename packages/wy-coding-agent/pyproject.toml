@@ -1,0 +1,23 @@
+[project]
+name = "wy-coding-agent"
+version = "0.1.0"
+description = "Coding agent on wy-core: Anthropic model, built-in tools, MCP, durable sessions, Textual TUI."
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.0",
+    "anthropic>=0.120.0",
+    "mcp>=1.28.1",
+    "ripgrep>=15.1.0",
+    "textual>=8.2.8",
+    "wy-core",
+]
+
+[project.scripts]
+wy-coding-agent = "wy_coding_agent.main:main"
+
+[tool.uv.sources]
+wy-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
