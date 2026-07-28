@@ -1,9 +1,7 @@
 """Grep tool: search file contents with a regular expression, backed by ripgrep.
 
-Modeled on the ripgrep-backed Grep tool of coding agents. The ``rg`` binary is
-provided by the ``ripgrep`` PyPI dependency (installed into the environment's
-scripts directory), with a PATH lookup as fallback, so the tool works wherever
-the library is installed.
+Modeled on the ripgrep-backed Grep tool of coding agents; locating and
+invoking ``rg`` is shared with the glob tool via ``tools/ripgrep.py``.
 
 The harness shells out to ``rg`` per call and post-processes its output:
 pagination via ``head_limit``/``offset`` with a default cap of 250 and ``0``
@@ -14,42 +12,23 @@ detection) are ripgrep's own.
 """
 
 import os
-import shutil
-import subprocess
-import sysconfig
 from pathlib import Path
 from typing import Any, Mapping
 
 from wy_core import Tool
+
+from wy_coding_agent.tools.ripgrep import VCS_DIRECTORIES, run_ripgrep
 
 
 class GrepToolError(ValueError):
     """Raised when a grep request is invalid or the search cannot complete."""
 
 
-# Version control directories excluded from every search; they only add noise.
-_VCS_DIRECTORIES = (".git", ".svn", ".hg", ".bzr", ".jj", ".sl")
-
 # Default cap when head_limit is unspecified; generous for exploration while
 # preventing context bloat. head_limit=0 is the explicit unlimited escape hatch.
 _DEFAULT_HEAD_LIMIT = 250
 _MAX_COLUMNS = 500  # keep minified/base64 lines from flooding output
 _MAX_OUTPUT_CHARS = 30_000  # final cap, same budget as the bash tool
-_SEARCH_TIMEOUT_SECONDS = 30
-
-
-def _rg_binary() -> str:
-    """Locate rg: the ripgrep wheel installs it in the scripts directory."""
-    executable = "rg.exe" if os.name == "nt" else "rg"
-    candidate = Path(sysconfig.get_path("scripts")) / executable
-    if candidate.is_file():
-        return str(candidate)
-    found = shutil.which(executable)
-    if found:
-        return found
-    raise GrepToolError(
-        "ripgrep binary not found; install the 'ripgrep' package or put rg on PATH"
-    )
 
 
 def _int_arg(arguments: Mapping[str, Any], name: str, default: int | None) -> int | None:
@@ -115,28 +94,6 @@ def _truncate_chars(output: str) -> str:
             + f"\n\n... Output truncated ({_MAX_OUTPUT_CHARS} character limit) ..."
         )
     return output
-
-
-def _run_ripgrep(args: list[str]) -> list[str]:
-    """Run rg and return stdout lines; exit 1 (no matches) is not an error."""
-    try:
-        process = subprocess.run(
-            [_rg_binary(), *args],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_SEARCH_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        raise GrepToolError(
-            f"search did not complete within {_SEARCH_TIMEOUT_SECONDS} seconds; "
-            "narrow the path, glob, or pattern"
-        ) from None
-    # Exit 2 with output means some files errored but matches were still found.
-    if process.returncode not in (0, 1) and not process.stdout:
-        detail = process.stderr.strip() or f"exit code {process.returncode}"
-        raise GrepToolError(f"ripgrep failed: {detail[:500]}")
-    return process.stdout.splitlines()
 
 
 class GrepTool(Tool):
@@ -289,7 +246,7 @@ class GrepTool(Tool):
             raise GrepToolError(f"Path does not exist: {path_arg}")
 
         args = ["--hidden", "--with-filename"]
-        for directory in _VCS_DIRECTORIES:
+        for directory in VCS_DIRECTORIES:
             args.extend(["--glob", f"!{directory}"])
         args.extend(["--max-columns", str(_MAX_COLUMNS)])
 
@@ -340,7 +297,7 @@ class GrepTool(Tool):
             args.append(pattern)
         args.append(str(root))
 
-        results = _run_ripgrep(args)
+        results = run_ripgrep(args, error=GrepToolError)
 
         # rg prints paths joined onto the absolute root; relativize against CWD.
         cwd = Path.cwd()

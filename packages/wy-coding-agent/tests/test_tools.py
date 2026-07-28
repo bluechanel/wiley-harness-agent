@@ -3,6 +3,7 @@ from wy_core import Tool
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.bash import BASH
 from wy_coding_agent.tools.edit import EDIT
+from wy_coding_agent.tools.glob import GLOB
 from wy_coding_agent.tools.grep import GREP
 from wy_coding_agent.tools.read import READ
 from wy_coding_agent.tools.write import WRITE
@@ -12,11 +13,12 @@ def test_default_tools_loads_every_tool_in_the_package() -> None:
     by_name = {tool.name: tool for tool in DEFAULT_TOOLS}
 
     assert by_name["bash"] is BASH
+    assert by_name["glob"] is GLOB
     assert by_name["grep"] is GREP
     assert by_name["read"] is READ
     assert by_name["edit"] is EDIT
     assert by_name["write"] is WRITE
-    assert len(DEFAULT_TOOLS) == 5
+    assert len(DEFAULT_TOOLS) == 6
 
 
 def test_default_tools_are_tool_instances_with_unique_names() -> None:

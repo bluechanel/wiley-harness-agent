@@ -12,9 +12,10 @@
 
 ## 工具体系
 
-- 工具体系在 `tools/`：内置工具每个一个子模块（`bash.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），一律直接继承 `wy_core.Tool` 定义工具类（`name`/`description`/`parameters` 类属性 + `execute` 方法）并给出模块级实例——`__init__.py` 自动扫描收集实例为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含模块级 Tool 实例的模块（共享辅助如 `files.py`，或只有类的 `mcp_tool.py`）可以并存，扫描自然跳过。`mcp_tool.py` 的 `MCPTool` 是 MCP 工具执行器，由 `mcp.py` 桥接层按连接构造，不进 `DEFAULT_TOOLS`。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
+- 工具体系在 `tools/`：内置工具每个一个子模块（`bash.py`、`glob.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），一律直接继承 `wy_core.Tool` 定义工具类（`name`/`description`/`parameters` 类属性 + `execute` 方法）并给出模块级实例——`__init__.py` 自动扫描收集实例为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含模块级 Tool 实例的模块（共享辅助如 `files.py`、`ripgrep.py`，或只有类的 `mcp_tool.py`）可以并存，扫描自然跳过。`mcp_tool.py` 的 `MCPTool` 是 MCP 工具执行器，由 `mcp.py` 桥接层按连接构造，不进 `DEFAULT_TOOLS`。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
 - `bash` 工具：持久 bash 会话挂在工具实例上（`DEFAULT_TOOLS` 每进程一份实例，惰性启动、stderr 并入 stdout、独立进程组），哨兵行捕获输出与退出码；`restart=true` 重建会话；超时（默认 120s）或会话意外退出时 kill 进程组、下次惰性重建；输出截断 200 行 / 30000 字符、读取阶段 1MB 捕获上限。安全措施：执行前经 `validate_command` 校验——shlex 解析后按 `ALLOWED_COMMANDS` 白名单放行首 token，拒绝独立 shell 运算符与 `$`/反引号展开；校验是绊线不是边界，无沙箱。审计经 `logging`（`...tools.bash` logger）记录所有命令。
-- `grep` 工具：shell out 到真实 ripgrep（PyPI `ripgrep` 依赖定位 `rg`），搜索语义即 rg 语义；harness 层做三种 `output_mode`、分页（`head_limit` 默认 250、`offset`）、路径相对化；固定 `--hidden`、排除 VCS 目录、30000 字符上限、30s 超时（超时抛错不静默返回空）。
+- `grep` 工具：shell out 到真实 ripgrep（定位与调用 `rg` 的辅助在 `ripgrep.py`，与 glob 工具共享），搜索语义即 rg 语义；harness 层做三种 `output_mode`、分页（`head_limit` 默认 250、`offset`）、路径相对化；固定 `--hidden`、排除 VCS 目录、30000 字符上限、30s 超时（超时抛错不静默返回空）。
+- `glob` 工具：按文件名模式找文件（对齐 Claude Code GlobTool）。`rg --files` 枚举候选（尊重 .gitignore、含隐藏文件、排除 VCS 目录），模式匹配在 harness 侧用自带的 gitignore 风格 glob→regex 翻译完成——不能用 rg 的 `--glob`，inclusion glob 会 override ignore 规则、把被忽略文件带回来。无斜杠模式匹配任意深度的文件名，含斜杠模式匹配相对搜索根的路径，`**` 跨零或多层目录；mtime 最新在前（同 grep 文件列表）、路径相对化、上限 100 条附截断提示；`path` 必须是存在的目录（缺失/非目录报错）。
 - 文件三件套 `read`/`edit`/`write` 无跨调用状态，共享辅助集中在 `files.py`（`FileToolError`、路径解析、missing-file 提示、CRLF 规范化）。`read`：cat -n 格式、offset/limit 分页（默认 2000 行）、单行截 2000 字符、全量 256KB 上限、拒绝二进制与设备文件。`edit`：old_string 精确且唯一（多匹配提示 `replace_all`）、空 old_string 建新文件、CRLF 保留。`write`：内容原样落盘、自动建父目录。错误消息措辞对齐 Claude Code 参考实现，便于模型自纠。原 `file_state.py` 的读取状态注册表（read-before-edit、外部修改检测、重读去重）已整体移除：文件状态属于 agent 级状态，规划后续在 agent 状态层统一管理（当前仅预留、未实现），不要再往工具层塞这类跨调用状态。
 
 ## 会话持久化与编排
