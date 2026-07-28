@@ -5,18 +5,14 @@ from pathlib import Path
 import pytest
 
 from wy_coding_agent.tools import bash as bash_module
-from wy_coding_agent.tools.bash import (
-    BashToolError,
-    execute_bash,
-    validate_command,
-)
+from wy_coding_agent.tools.bash import BASH, BashToolError, validate_command
 
 
 @pytest.fixture(autouse=True)
 def fresh_session():
-    bash_module._reset_session()
+    BASH._reset_session()
     yield
-    bash_module._reset_session()
+    BASH._reset_session()
 
 
 @pytest.fixture
@@ -67,28 +63,28 @@ def test_validate_rejects_empty_command() -> None:
 
 def test_execute_rejects_disallowed_command_without_running_it() -> None:
     with pytest.raises(BashToolError, match="not in the allowlist"):
-        execute_bash({"command": "python -c 'print(1)'"})
+        BASH.execute({"command": "python -c 'print(1)'"})
 
 
 def test_missing_command_is_rejected() -> None:
     with pytest.raises(BashToolError, match="Missing required argument: command"):
-        execute_bash({})
+        BASH.execute({})
 
 
 def test_echo_returns_output() -> None:
-    assert execute_bash({"command": "echo hello"}) == "hello"
+    assert BASH.execute({"command": "echo hello"}) == "hello"
 
 
 def test_stderr_is_interleaved_with_stdout() -> None:
-    assert execute_bash({"command": "echo err >&2"}) == "err"
+    assert BASH.execute({"command": "echo err >&2"}) == "err"
 
 
 def test_silent_success_reports_no_output() -> None:
-    assert execute_bash({"command": "cat /dev/null"}) == "(no output)"
+    assert BASH.execute({"command": "cat /dev/null"}) == "(no output)"
 
 
 def test_nonzero_exit_code_is_reported() -> None:
-    assert execute_bash({"command": "grep needle /dev/null"}) == "Exit code: 1"
+    assert BASH.execute({"command": "grep needle /dev/null"}) == "Exit code: 1"
 
 
 def test_working_directory_persists_between_commands(
@@ -96,25 +92,25 @@ def test_working_directory_persists_between_commands(
 ) -> None:
     allow_extra("cd")
 
-    execute_bash({"command": f"cd '{tmp_path}'"})
+    BASH.execute({"command": f"cd '{tmp_path}'"})
 
-    assert execute_bash({"command": "pwd -P"}) == os.path.realpath(tmp_path)
+    assert BASH.execute({"command": "pwd -P"}) == os.path.realpath(tmp_path)
 
 
 def test_restart_clears_state(
     tmp_path: Path, allow_extra: Callable[..., None]
 ) -> None:
     allow_extra("cd")
-    execute_bash({"command": f"cd '{tmp_path}'"})
+    BASH.execute({"command": f"cd '{tmp_path}'"})
 
-    assert execute_bash({"restart": True}) == "Bash session restarted"
-    assert execute_bash({"command": "pwd -P"}) == os.path.realpath(os.getcwd())
+    assert BASH.execute({"restart": True}) == "Bash session restarted"
+    assert BASH.execute({"command": "pwd -P"}) == os.path.realpath(os.getcwd())
 
 
 def test_large_output_is_truncated(allow_extra: Callable[..., None]) -> None:
     allow_extra("seq")
 
-    output = execute_bash({"command": "seq 500"})
+    output = BASH.execute({"command": "seq 500"})
 
     assert "Output truncated (500 total lines)" in output
     assert "\n201\n" not in output
@@ -127,9 +123,9 @@ def test_timeout_kills_command_and_restarts_session(
     monkeypatch.setattr(bash_module, "_COMMAND_TIMEOUT_SECONDS", 1)
 
     with pytest.raises(BashToolError, match="did not finish within 1 seconds"):
-        execute_bash({"command": "sleep 5"})
+        BASH.execute({"command": "sleep 5"})
 
-    assert execute_bash({"command": "echo recovered"}) == "recovered"
+    assert BASH.execute({"command": "echo recovered"}) == "recovered"
 
 
 def test_invalid_utf8_output_does_not_break_the_session(
@@ -137,10 +133,10 @@ def test_invalid_utf8_output_does_not_break_the_session(
 ) -> None:
     allow_extra("printf")
 
-    output = execute_bash({"command": "printf '\\xff\\xfe end'"})
+    output = BASH.execute({"command": "printf '\\xff\\xfe end'"})
 
     assert output.endswith("end")
-    assert execute_bash({"command": "echo still-alive"}) == "still-alive"
+    assert BASH.execute({"command": "echo still-alive"}) == "still-alive"
 
 
 def test_session_exit_is_reported_and_recovered(
@@ -149,6 +145,6 @@ def test_session_exit_is_reported_and_recovered(
     allow_extra("exit")
 
     with pytest.raises(BashToolError, match="session exited"):
-        execute_bash({"command": "exit"})
+        BASH.execute({"command": "exit"})
 
-    assert execute_bash({"command": "echo recovered"}) == "recovered"
+    assert BASH.execute({"command": "echo recovered"}) == "recovered"

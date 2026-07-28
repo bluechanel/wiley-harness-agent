@@ -3,7 +3,8 @@
 Follows the client-tool contract of Anthropic's bash tool docs: working
 directory, environment variables and files persist between commands;
 ``restart: true`` discards the session; a command that outlives the timeout
-gets its whole process group killed and the session replaced.
+gets its whole process group killed and the session replaced. The session
+lives on the tool instance — ``DEFAULT_TOOLS`` holds one instance per process.
 
 Every command is validated against an explicit allowlist before it runs;
 anything else is rejected without executing. There is still no sandbox —
@@ -17,9 +18,8 @@ import shlex
 import signal
 import subprocess
 import uuid
-from typing import Any, Mapping
 
-from wy_coding_agent.tools.base import FunctionTool
+from wy_core import Tool
 
 _log = logging.getLogger(__name__)
 
@@ -27,33 +27,6 @@ _log = logging.getLogger(__name__)
 class BashToolError(ValueError):
     """Raised when a bash request is invalid or the session breaks."""
 
-
-BASH_TOOL: dict[str, Any] = {
-    "name": "bash",
-    "description": (
-        "Run commands in a persistent bash session. Working directory, "
-        "environment variables and files persist between calls. Only "
-        "allowlisted executables are permitted (ls, cat, echo, pwd, grep, "
-        "find, wc, head, tail); standalone shell operators (&&, ||, |, ;, "
-        "&, >, <, >>) and $/backtick expansions are rejected. Interactive "
-        "commands that wait on stdin are not supported and will time out. "
-        "Set restart=true to discard the session and start a fresh one."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "The bash command to run. Required unless restart is true.",
-            },
-            "restart": {
-                "type": "boolean",
-                "description": "Kill the current bash session and start a new one.",
-            },
-        },
-        "additionalProperties": False,
-    },
-}
 
 _COMMAND_TIMEOUT_SECONDS = 120
 _MAX_OUTPUT_LINES = 200
@@ -136,16 +109,6 @@ class BashSession:
         self._process.wait()
 
 
-_session: BashSession | None = None
-
-
-def _reset_session() -> None:
-    global _session
-    if _session is not None:
-        _session.kill()
-        _session = None
-
-
 def _truncate_output(output: str) -> str:
     """Cap huge command output before it goes back into model context."""
     lines = output.splitlines()
@@ -160,51 +123,83 @@ def _truncate_output(output: str) -> str:
     return output
 
 
-def execute_bash(arguments: Mapping[str, Any]) -> str:
-    """Execute a bash request and return the command output."""
-    global _session
-    if arguments.get("restart"):
-        _reset_session()
-        _log.info("bash session restarted")
-        return "Bash session restarted"
+class BashTool(Tool):
+    name = "bash"
+    description = (
+        "Run commands in a persistent bash session. Working directory, "
+        "environment variables and files persist between calls. Only "
+        "allowlisted executables are permitted (ls, cat, echo, pwd, grep, "
+        "find, wc, head, tail); standalone shell operators (&&, ||, |, ;, "
+        "&, >, <, >>) and $/backtick expansions are rejected. Interactive "
+        "commands that wait on stdin are not supported and will time out. "
+        "Set restart=true to discard the session and start a fresh one."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "The bash command to run. Required unless restart is true.",
+            },
+            "restart": {
+                "type": "boolean",
+                "description": "Kill the current bash session and start a new one.",
+            },
+        },
+        "additionalProperties": False,
+    }
 
-    command = arguments.get("command")
-    if not isinstance(command, str):
-        raise BashToolError("Missing required argument: command")
-    allowed, reason = validate_command(command)
-    if not allowed:
-        _log.warning("bash rejected command=%r reason=%s", command, reason)
-        raise BashToolError(reason or "Command rejected")
+    def __init__(self) -> None:
+        self._session: BashSession | None = None
 
-    if _session is None:
-        _session = BashSession()
-    session = _session
-    _log.info("bash command=%r", command)  # audit before running: survives a hang
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(session.execute, command)
-        try:
-            output, exit_code = future.result(timeout=_COMMAND_TIMEOUT_SECONDS)
-        except concurrent.futures.TimeoutError:
-            _reset_session()  # unblocks the reader thread as a side effect
-            _log.warning("bash timeout command=%r", command)
-            raise BashToolError(
-                f"command did not finish within {_COMMAND_TIMEOUT_SECONDS} seconds; "
-                "the bash session was restarted"
-            ) from None
+    def _reset_session(self) -> None:
+        if self._session is not None:
+            self._session.kill()
+            self._session = None
 
-    _log.info("bash exit_code=%s output=%r", exit_code, output[:200])
-    if exit_code is None:
-        _reset_session()
-        message = "bash session exited; a fresh session starts on the next command"
-        if output:
-            message = f"{message}\nOutput before exit:\n{_truncate_output(output)}"
-        raise BashToolError(message)
+    def execute(self, input: dict) -> str:
+        if input.get("restart"):
+            self._reset_session()
+            _log.info("bash session restarted")
+            return "Bash session restarted"
 
-    output = _truncate_output(output).rstrip("\n")
-    if exit_code != 0:
-        status_note = f"Exit code: {exit_code}"
-        output = f"{output}\n{status_note}" if output else status_note
-    return output if output else "(no output)"
+        command = input.get("command")
+        if not isinstance(command, str):
+            raise BashToolError("Missing required argument: command")
+        allowed, reason = validate_command(command)
+        if not allowed:
+            _log.warning("bash rejected command=%r reason=%s", command, reason)
+            raise BashToolError(reason or "Command rejected")
+
+        if self._session is None:
+            self._session = BashSession()
+        session = self._session
+        _log.info("bash command=%r", command)  # audit before running: survives a hang
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(session.execute, command)
+            try:
+                output, exit_code = future.result(timeout=_COMMAND_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError:
+                self._reset_session()  # unblocks the reader thread as a side effect
+                _log.warning("bash timeout command=%r", command)
+                raise BashToolError(
+                    f"command did not finish within {_COMMAND_TIMEOUT_SECONDS} seconds; "
+                    "the bash session was restarted"
+                ) from None
+
+        _log.info("bash exit_code=%s output=%r", exit_code, output[:200])
+        if exit_code is None:
+            self._reset_session()
+            message = "bash session exited; a fresh session starts on the next command"
+            if output:
+                message = f"{message}\nOutput before exit:\n{_truncate_output(output)}"
+            raise BashToolError(message)
+
+        output = _truncate_output(output).rstrip("\n")
+        if exit_code != 0:
+            status_note = f"Exit code: {exit_code}"
+            output = f"{output}\n{status_note}" if output else status_note
+        return output if output else "(no output)"
 
 
-BASH = FunctionTool(definition=BASH_TOOL, execute=execute_bash)
+BASH = BashTool()

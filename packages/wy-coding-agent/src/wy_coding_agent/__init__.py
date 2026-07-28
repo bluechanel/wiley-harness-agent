@@ -36,7 +36,7 @@ from wy_coding_agent.session import (
     SessionRecord,
     SessionStore,
 )
-from wy_coding_agent.tools import DEFAULT_TOOLS, FunctionTool
+from wy_coding_agent.tools import DEFAULT_TOOLS
 
 __all__ = [
     "AgentMDProvider",
@@ -47,7 +47,6 @@ __all__ = [
     "ConfigError",
     "ConversationService",
     "DEFAULT_TOOLS",
-    "FunctionTool",
     "MCPClientManager",
     "MCPServerConfig",
     "MemoryProvider",

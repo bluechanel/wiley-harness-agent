@@ -16,9 +16,9 @@ from wy_coding_agent.config import (
 )
 from wy_coding_agent.mcp import (
     MCPClientManager,
-    result_to_text,
     tool_full_name,
 )
+from wy_coding_agent.tools.mcp_tool import result_to_text
 
 # --- config parsing ---
 

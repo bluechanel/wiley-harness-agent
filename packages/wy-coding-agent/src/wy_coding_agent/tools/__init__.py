@@ -1,16 +1,17 @@
 """内置工具与自动发现。
 
-每个子模块以模块级 ``Tool`` 实例(通常经 ``FunctionTool`` 构造)定义一个
-内置工具;``DEFAULT_TOOLS`` 自动扫描本包全部子模块收集它们——新增内置
-工具即新增子模块,无需维护注册表。不含 ``Tool`` 实例的共享辅助模块
-(如 ``file_state``)可以并存,扫描自然跳过。外部工具按 ``wy_core.Tool``
-契约编写后经 ``create_agent(tools=...)`` 注入。
+每个子模块直接继承 ``wy_core.Tool`` 定义工具类(``name``/``description``/
+``parameters`` 类属性 + ``execute`` 方法)并给出模块级实例;``DEFAULT_TOOLS``
+自动扫描本包全部子模块收集这些实例——新增内置工具即新增子模块,无需维护
+注册表。只有类而无模块级实例的模块(如 ``mcp_tool``,由 mcp 桥接层按连接
+构造)与共享辅助模块(如 ``files``)可以并存,扫描自然跳过。外部工具按
+``wy_core.Tool`` 契约编写后经 ``create_agent(tools=...)`` 注入。
 """
 
 import importlib
 import pkgutil
 
-from wy_coding_agent.tools.base import FunctionTool, Tool
+from wy_core import Tool
 
 
 def _discover_tools() -> tuple[Tool, ...]:
@@ -31,4 +32,4 @@ def _discover_tools() -> tuple[Tool, ...]:
 
 DEFAULT_TOOLS: tuple[Tool, ...] = _discover_tools()
 
-__all__ = ["DEFAULT_TOOLS", "FunctionTool", "Tool"]
+__all__ = ["DEFAULT_TOOLS", "Tool"]

@@ -12,10 +12,10 @@
 
 ## 工具体系
 
-- 工具体系在 `tools/`：`base.py` re-export `wy_core.Tool` 并提供 `FunctionTool`（definition 字典 + 执行函数 → Tool 实例），内置工具每个一个子模块（`bash.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），模块级定义 Tool 实例即可——`__init__.py` 自动扫描收集为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含 Tool 实例的共享辅助模块（如 `file_state.py`）可以并存。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
-- `bash` 工具：进程级单例的持久 bash 会话（惰性启动、stderr 并入 stdout、独立进程组），哨兵行捕获输出与退出码；`restart=true` 重建会话；超时（默认 120s）或会话意外退出时 kill 进程组、下次惰性重建；输出截断 200 行 / 30000 字符、读取阶段 1MB 捕获上限。安全措施：执行前经 `validate_command` 校验——shlex 解析后按 `ALLOWED_COMMANDS` 白名单放行首 token，拒绝独立 shell 运算符与 `$`/反引号展开；校验是绊线不是边界，无沙箱。审计经 `logging`（`...tools.bash` logger）记录所有命令。
+- 工具体系在 `tools/`：内置工具每个一个子模块（`bash.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），一律直接继承 `wy_core.Tool` 定义工具类（`name`/`description`/`parameters` 类属性 + `execute` 方法）并给出模块级实例——`__init__.py` 自动扫描收集实例为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含模块级 Tool 实例的模块（共享辅助如 `files.py`，或只有类的 `mcp_tool.py`）可以并存，扫描自然跳过。`mcp_tool.py` 的 `MCPTool` 是 MCP 工具执行器，由 `mcp.py` 桥接层按连接构造，不进 `DEFAULT_TOOLS`。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
+- `bash` 工具：持久 bash 会话挂在工具实例上（`DEFAULT_TOOLS` 每进程一份实例，惰性启动、stderr 并入 stdout、独立进程组），哨兵行捕获输出与退出码；`restart=true` 重建会话；超时（默认 120s）或会话意外退出时 kill 进程组、下次惰性重建；输出截断 200 行 / 30000 字符、读取阶段 1MB 捕获上限。安全措施：执行前经 `validate_command` 校验——shlex 解析后按 `ALLOWED_COMMANDS` 白名单放行首 token，拒绝独立 shell 运算符与 `$`/反引号展开；校验是绊线不是边界，无沙箱。审计经 `logging`（`...tools.bash` logger）记录所有命令。
 - `grep` 工具：shell out 到真实 ripgrep（PyPI `ripgrep` 依赖定位 `rg`），搜索语义即 rg 语义；harness 层做三种 `output_mode`、分页（`head_limit` 默认 250、`offset`）、路径相对化；固定 `--hidden`、排除 VCS 目录、30000 字符上限、30s 超时（超时抛错不静默返回空）。
-- 文件三件套 `read`/`edit`/`write` 靠 `file_state.py` 的进程级读取状态注册表联动：`read` 记录所见内容/mtime/范围，`edit` 与 `write`（覆盖已有文件时）要求先读过且磁盘未变（内容一致则容忍时间戳抖动），改写成功后刷新记录。`read`：cat -n 格式、offset/limit 分页（默认 2000 行）、单行截 2000 字符、全量 256KB 上限、拒绝二进制与设备文件、同范围重读未变返回 unchanged 存根；默认截断视为 partial view 不授权编辑。`edit`：old_string 精确且唯一（多匹配提示 `replace_all`）、CRLF 保留。`write`：内容原样落盘、自动建父目录。错误消息措辞对齐 Claude Code 参考实现，便于模型自纠。
+- 文件三件套 `read`/`edit`/`write` 无跨调用状态，共享辅助集中在 `files.py`（`FileToolError`、路径解析、missing-file 提示、CRLF 规范化）。`read`：cat -n 格式、offset/limit 分页（默认 2000 行）、单行截 2000 字符、全量 256KB 上限、拒绝二进制与设备文件。`edit`：old_string 精确且唯一（多匹配提示 `replace_all`）、空 old_string 建新文件、CRLF 保留。`write`：内容原样落盘、自动建父目录。错误消息措辞对齐 Claude Code 参考实现，便于模型自纠。原 `file_state.py` 的读取状态注册表（read-before-edit、外部修改检测、重读去重）已整体移除：文件状态属于 agent 级状态，规划后续在 agent 状态层统一管理（当前仅预留、未实现），不要再往工具层塞这类跨调用状态。
 
 ## 会话持久化与编排
 
@@ -24,7 +24,7 @@
 
 ## MCP client
 
-- `mcp.py` 的 `MCPClientManager`：TOML `[[mcp.servers]]` 配置（stdio/http 两种 transport），SDK 全 async 且 session 是 task 作用域 context manager，而工具执行器是同步契约——manager 用专用后台线程跑独立 event loop，工具执行经 `run_coroutine_threadsafe(...).result(120s)` 桥接，以 `FunctionTool` 形态并入工具集（`mcp__<server>__<tool>` 命名；server 侧 isError → raise，由 wy-core 循环统一转 `Error: ...`）。`start()` 阻塞至各 server 就绪或超时（失败记 warning 跳过，不阻断启动），组装后显式查重工具名（冲突抛 ConfigError）。测试用 `sys.executable -c` 内联 FastMCP 脚本起真实 stdio server 做全链路验证。
+- MCP 拆桥接与执行两层。`mcp.py` 的 `MCPClientManager` 只做桥接：TOML `[[mcp.servers]]` 配置（stdio/http 两种 transport），SDK 全 async 且 session 是 task 作用域 context manager——manager 用专用后台线程跑独立 event loop，管连接生命周期与 `mcp__<server>__<tool>` 命名，按连接构造 `MCPTool` 并入工具集；`start()` 阻塞至各 server 就绪或超时（失败记 warning 跳过，不阻断启动），组装后显式查重工具名（冲突抛 ConfigError）。执行在 `tools/mcp_tool.py` 的 `MCPTool`：经构造期注入的桥接侧 `acquire()` 取当前 (session, loop)（未连接/已关闭抛 RuntimeError），`run_coroutine_threadsafe(...).result(120s)` 桥进后台 loop，`result_to_text` 把 CallToolResult 翻译成文本（server 侧 isError → raise，由 wy-core 循环统一转 `Error: ...`）；该模块不 import MCP SDK。测试用 `sys.executable -c` 内联 FastMCP 脚本起真实 stdio server 做全链路验证。
 
 ## System prompt 组装
 
