@@ -1,13 +1,14 @@
 """Tests for the RealtimeAgent orchestration: transcripts, function calling,
-interruption, echo suppression and auditing."""
+interruption, echo suppression, user text injection and auditing."""
 
+import asyncio
 import base64
 import json
 from pathlib import Path
 
 import pytest
 
-from wy_core import Tool, ToolCall, ToolResult
+from wy_core import AuditLog, Tool, ToolCall, ToolResult
 
 from wy_realtime_agent.agent import (
     AssistantTranscript,
@@ -16,7 +17,7 @@ from wy_realtime_agent.agent import (
     SessionEnded,
     UserTranscript,
 )
-from wy_realtime_agent.protocol import RealtimeClient
+from wy_realtime_agent.protocol import RealtimeClient, RealtimeError
 
 from realtime_helpers import (
     FakeMic,
@@ -281,3 +282,206 @@ def test_duplicate_tool_names_rejected() -> None:
             speaker=FakeSpeaker(),
             audit=None,
         )
+
+
+def test_send_user_text_idle_sends_immediately_and_audits(tmp_path: Path) -> None:
+    agent, ws = make_agent(
+        [
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "你好",
+            },
+        ],
+        audit=AuditLog(tmp_path / "audit.jsonl"),
+    )
+    items_when_sent: list[int] = []
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript):
+            await agent.send_user_text("文字指令")
+            items_when_sent.append(len(ws.sent_of_type("conversation.item.create")))
+
+    run_agent(agent, on_event=inject)
+
+    assert items_when_sent == [1]  # 空闲(不在听、不在答)时立即发出
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"] for event in items] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "文字指令"}],
+        }
+    ]
+    # 注入后紧跟一次 response.create,让模型立即执行指令。
+    creates = ws.sent_of_type("response.create")
+    assert len(creates) == 1
+    assert ws.sent.index(creates[0]) > ws.sent.index(items[0])
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "user_text" in kinds
+
+
+def test_send_user_text_during_response_blocked_until_done() -> None:
+    agent, ws = make_agent(
+        [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "触发",
+            },
+            {"type": "response.done", "response": {"id": "resp_1", "status": "completed"}},
+        ]
+    )
+    items_when_queued: list[int] = []
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript):
+            await agent.send_user_text("第一条")
+            await agent.send_user_text("第二条")
+            items_when_queued.append(len(ws.sent_of_type("conversation.item.create")))
+
+    run_agent(agent, on_event=inject)
+
+    assert items_when_queued == [0]  # 回答进行中被阻塞,未发出
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"]["content"][0]["text"] for event in items] == ["第一条", "第二条"]
+    # 补发的多条指令合并为一次 response.create,且在全部指令之后。
+    creates = ws.sent_of_type("response.create")
+    assert len(creates) == 1
+    assert ws.sent.index(creates[0]) > ws.sent.index(items[-1])
+
+
+def test_queued_user_text_survives_interruption_and_waits_for_next_idle() -> None:
+    agent, ws = make_agent(
+        [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "触发",
+            },
+            {"type": "input_audio_buffer.speech_started"},
+            {"type": "response.done", "response": {"id": "resp_1", "status": "cancelled"}},
+            # 打断后仍处于"在听":cancelled 的 response.done 不能补发指令。
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "新轮次",
+            },
+            {"type": "response.created", "response": {"id": "resp_2"}},
+            {"type": "response.done", "response": {"id": "resp_2", "status": "completed"}},
+        ]
+    )
+    items_after_cancel: list[int] = []
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript) and event.text == "触发":
+            await agent.send_user_text("别丢了")
+        if isinstance(event, UserTranscript) and event.text == "新轮次":
+            items_after_cancel.append(len(ws.sent_of_type("conversation.item.create")))
+
+    events = run_agent(agent, on_event=inject)
+
+    assert Interrupted(response_id="resp_1") in events
+    assert items_after_cancel == [0]  # 在听期间(含 cancelled done 之后)仍被阻塞
+    # 新语音轮次答完回到空闲,指令照常补发并触发执行,不随打断丢弃。
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"]["content"][0]["text"] for event in items] == ["别丢了"]
+    assert len(ws.sent_of_type("response.create")) == 1
+
+
+def test_queued_user_text_waits_for_tool_second_round() -> None:
+    agent, ws = make_agent(
+        [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "触发",
+            },
+            _call_done("c1", "echo", {"text": "hi"}),
+            {"type": "response.done", "response": {"id": "resp_1", "status": "completed"}},
+            {"type": "response.created", "response": {"id": "resp_2"}},
+            {"type": "response.done", "response": {"id": "resp_2", "status": "completed"}},
+        ],
+        tools=(EchoTool(),),
+    )
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript):
+            await agent.send_user_text("等二轮")
+
+    run_agent(agent, on_event=inject)
+
+    # 带工具的回合到二轮(resp_2)结束才算真正空闲:先回写工具结果并触发二轮,
+    # 二轮答完再注入指令并再触发一次执行。
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"]["type"] for event in items] == ["function_call_output", "message"]
+    creates = ws.sent_of_type("response.create")
+    assert len(creates) == 2
+    assert ws.sent.index(items[-1]) > ws.sent.index(creates[0])
+    assert ws.sent.index(creates[-1]) > ws.sent.index(items[-1])
+
+
+def test_send_user_text_while_listening_blocked_until_turn_answered() -> None:
+    agent, ws = make_agent(
+        [
+            {"type": "input_audio_buffer.speech_started"},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "语音提问",
+            },
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {"type": "response.done", "response": {"id": "resp_1", "status": "completed"}},
+        ]
+    )
+    items_when_queued: list[int] = []
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript):
+            await agent.send_user_text("后台指令")
+            items_when_queued.append(len(ws.sent_of_type("conversation.item.create")))
+
+    run_agent(agent, on_event=inject)
+
+    assert items_when_queued == [0]  # "在听"(语音轮次尚未开答)时同样被阻塞
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"]["content"][0]["text"] for event in items] == ["后台指令"]
+    assert len(ws.sent_of_type("response.create")) == 1
+
+
+def test_ambient_transcription_ends_listening_and_flushes() -> None:
+    agent, ws = make_agent(
+        [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "触发",
+            },
+            {"type": "input_audio_buffer.speech_started"},
+            {"type": "response.done", "response": {"id": "resp_1", "status": "cancelled"}},
+            # smart_turn 判定这段语音为非有效轮次:不会再有新回答,靠 ambient
+            # completed 结束"在听",否则指令会一直卡到下一次语音轮次。
+            {
+                "type": "conversation.item.ambient_audio_transcription.completed",
+                "item_id": "item_1",
+                "text": "嗯",
+            },
+        ]
+    )
+
+    async def inject(event) -> None:
+        if isinstance(event, UserTranscript):
+            await agent.send_user_text("别卡住")
+
+    run_agent(agent, on_event=inject)
+
+    items = ws.sent_of_type("conversation.item.create")
+    assert [event["item"]["content"][0]["text"] for event in items] == ["别卡住"]
+    assert len(ws.sent_of_type("response.create")) == 1
+
+
+def test_send_user_text_before_connect_raises() -> None:
+    agent, _ws = make_agent([])
+
+    with pytest.raises(RealtimeError, match="尚未连接"):
+        asyncio.run(agent.send_user_text("hi"))

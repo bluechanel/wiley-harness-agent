@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from wy_realtime_agent.agent import RealtimeAgent, RealtimeEvent
@@ -151,10 +151,22 @@ def make_agent(
     return agent, ws
 
 
-def run_agent(agent: RealtimeAgent) -> list[RealtimeEvent]:
-    """同步跑完一次 run(),收集全部 RealtimeEvent。"""
+def run_agent(
+    agent: RealtimeAgent,
+    on_event: Callable[[RealtimeEvent], Awaitable[None]] | None = None,
+) -> list[RealtimeEvent]:
+    """同步跑完一次 run(),收集全部 RealtimeEvent。
+
+    ``on_event``(async)在每个事件产出后调用,用于中途驱动 agent(如注入
+    文字消息);此时 run() 挂起在 yield 点,回调内观察到的状态是确定性的。
+    """
 
     async def go() -> list[RealtimeEvent]:
-        return [event async for event in agent.run()]
+        events: list[RealtimeEvent] = []
+        async for event in agent.run():
+            events.append(event)
+            if on_event is not None:
+                await on_event(event)
+        return events
 
     return asyncio.run(go())

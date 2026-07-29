@@ -16,8 +16,9 @@
   - **Function calling 是收集式**（刻意不同于官方 demo 的"逐个 arguments.done 即执行+每次 response.create"）：一次响应可含多个 function_call，先收集，`response.done` 且 status 非 cancelled 时统一顺序执行、逐个回写 `function_call_output`，**最后只发一次** `response.create`；被打断（cancelled）的响应丢弃未执行调用。arguments.done 与 response.done 间隔毫秒级，延迟代价可忽略。
   - **打断**：`speech_started` 即 `speaker.clear()`；若在回复中则再发 `response.cancel` 并抑制残余 `audio.delta` 直到下一个 `response.created`。
   - **回声抑制**（`_send_audio`）：`echo_suppression=true` 回复/播放期间闭麦 + 结束后 0.5s 冷却，不支持打断；`false`（耳机模式）用能量门限（阈值 500，`_audio_energy` 自实现，3.13 无 audioop）滤回声、高能量语音照发以支持打断。
-  - 审计 kinds：`agent_start`/`session_update`/`user_transcript`/`assistant_transcript`/`interrupted`/`tool_call`/`tool_result`/`error`。
-  - 未知服务端事件（含 smart_turn 的 ambient 转写、voiceprint 注册事件）一律静默忽略；`error` 事件只记审计不断流（服务端致命错误会随后关连接）。
+  - **后台指令注入**：公开方法 `send_user_text()` 把后台文字指令经 `conversation.item.create`（`role=user` + `input_text`）注入并紧跟一次 `response.create` 让模型立即执行。仅空闲时发出，忙碌一律入队：在听（`speech_started` 起，到该轮 `response.created` 或 ambient completed 判非轮次止）、在答（`response.created`→`response.done`）、响应待建（客户端已发 `response.create` 而 `response.created` 未到的防抖窗口，`error` 事件兜底清除）都算忙。回合真正结束（无待执行工具的 `response.done`，或 ambient completed）时按序补发全部排队指令、只触发一次 `response.create`；带工具的回合等二轮结束，打断不丢队列。须在 `run()` 所在事件循环调用，未建连时抛 `RealtimeError`。
+  - 审计 kinds：`agent_start`/`session_update`/`user_transcript`/`assistant_transcript`/`user_text`/`interrupted`/`tool_call`/`tool_result`/`error`。
+  - 未知服务端事件（含 voiceprint 注册事件）一律静默忽略；smart_turn 的 ambient 转写不透出事件，仅 `conversation.item.ambient_audio_transcription.completed` 用于结束"在听"状态；`error` 事件只记审计不断流（服务端致命错误会随后关连接）。
 - `mcp.py` 与 `tools/mcp_tool.py`：wy-coding-agent 同名模块的复刻件（仅 import 路径不同）——后台线程独立 event loop 桥接、`mcp__<server>__<tool>` 命名、连接失败记 warning 跳过；`MCPTool.execute` 同步、`run_coroutine_threadsafe` 桥调（120s 超时）。`tools/read.py` 复刻 ReadTool 并内联了原 `files.py` 中它用到的辅助。**修改任一复刻件时必须评估 wy-coding-agent 侧的同名实现是否要同步改**（反之亦然）。
 - `tools/__init__.py`：只有 read 一个内置工具，`DEFAULT_TOOLS = (READ,)` 显式列出，不做 wy-coding-agent 那套自动扫描。
 - `factory.py`：组装唯一入口，两层：`bootstrap(config_path=None)` 读 CWD/config.toml（`[realtime]` + `[[mcp.servers]]` 共用同一文件）一站式组装；`create_agent(config, tools=None, client=None, mic=None, speaker=None, mcp_config=None, audit=True)` 为可编程组装点（client/mic/speaker 可注入替身，工具名冲突抛 ConfigError，MCP closer 注入 agent 由 `close()` 释放）。外部一律经这两个入口创建 agent。
@@ -31,6 +32,6 @@
 
 ## 测试
 
-- 测试在 `tests/`，不引入 pytest-asyncio：async 流程用 `realtime_helpers.run_agent`（内部 `asyncio.run`）收集事件。`FakeWebSocket` 以脚本化服务端事件驱动全链路（`WaitFor` 控制项用于与发送任务同步，谓词收 ws 本体）；`FakeMic`/`FakeSpeaker` 与 `test_realtime_audio.py` 的假设备流保证测试不碰真实网络与音频设备。
+- 测试在 `tests/`，不引入 pytest-asyncio：async 流程用 `realtime_helpers.run_agent`（内部 `asyncio.run`，可传 async `on_event` 回调在事件产出点中途驱动 agent，如注入文字消息）收集事件。`FakeWebSocket` 以脚本化服务端事件驱动全链路（`WaitFor` 控制项用于与发送任务同步，谓词收 ws 本体）；`FakeMic`/`FakeSpeaker` 与 `test_realtime_audio.py` 的假设备流保证测试不碰真实网络与音频设备。
 - 测试文件名跨包必须唯一（本包统一 `test_realtime_*` 前缀，辅助为 `realtime_helpers.py`）。涉及默认审计的用例必须 `monkeypatch.chdir(tmp_path)`；其余一律 `audit=None`/`audit=False`。
 - `test_realtime_mcp.py` 用 `sys.executable -c` 内联 FastMCP 脚本起真实 stdio server 做全链路验证（与复刻源保持同等测试强度）。
