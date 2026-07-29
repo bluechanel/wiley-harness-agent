@@ -1,0 +1,21 @@
+[project]
+name = "wy-realtime-agent"
+version = "0.1.0"
+description = "Realtime voice agent on wy-core: Qwen-Audio realtime WebSocket, streaming mic/speaker, read tool + MCP."
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.28.1",
+    "sounddevice>=0.5",
+    "websockets>=14",
+    "wy-core",
+]
+
+[project.scripts]
+wy-realtime-agent = "wy_realtime_agent.main:main"
+
+[tool.uv.sources]
+wy-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
