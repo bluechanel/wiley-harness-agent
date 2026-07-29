@@ -10,6 +10,28 @@ thinking_budget_tokens = 4096
 # max_context_tokens = 150000
 # keep_recent = 8
 
+# Agent Skills（可选）：dirs 为技能目录列表，每个技能是一个含 SKILL.md 的
+# 子目录（frontmatter name/description + 正文指令 + 随包文件）。目录顺序即
+# 优先级（同名先者胜），~ 会展开，相对路径按启动目录解析。
+# 省略整段时默认 ["~/.claude/skills", ".claude/skills"]（对齐 Claude Code
+# 的个人/项目目录）；dirs = [] 显式关闭 skills。
+# [skills]
+# dirs = ["~/.claude/skills", ".claude/skills"]
+
+# 实时语音 agent（wy-realtime-agent）配置：url 为北京地域 WebSocket 地址，
+# 把 {WorkspaceId}（含花括号）替换为真实业务空间 ID。
+# [realtime]
+# url = "wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime"
+# api_key = "your-api-key"                  # DashScope API Key
+# model = "qwen-audio-3.0-realtime-plus"
+# voice = "longanqian"                      # 可选，仅首次会话配置生效
+# instructions = ""                         # 可选，系统指令（人设/风格）
+# mode = "server_vad"                       # 可选："server_vad" | "smart_turn"
+# vad_threshold = 0.5                       # 可选，仅 server_vad，[-1.0, 1.0]
+# vad_silence_ms = 800                      # 可选，仅 server_vad，[200, 6000]
+# echo_suppression = true                   # 可选：true=AI 说话时闭麦（免耳机）；false=耳机模式，支持语音打断
+# max_history_turns = 20                    # 可选，[1, 50]
+
 # MCP server 配置（可选）：每个 [[mcp.servers]] 一个 server，
 # 其工具以 mcp__<name>__<tool> 名称并入 agent 工具集。
 # [[mcp.servers]]

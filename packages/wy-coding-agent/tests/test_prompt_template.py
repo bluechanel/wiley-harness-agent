@@ -10,6 +10,7 @@ from wy_coding_agent.prompt_template import (
     build_prompt,
     default_prompt_providers,
 )
+from wy_coding_agent.skills import Skill
 
 
 class _StaticProvider(BasePromptProvider):
@@ -78,25 +79,25 @@ def test_agent_md_provider_missing_returns_none(tmp_path: Path) -> None:
     assert AgentMDProvider(tmp_path).provide() is None
 
 
-def test_skill_provider_lists_markdown_files(tmp_path: Path) -> None:
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "deploy.md").write_text("how to deploy", encoding="utf-8")
-    (skills_dir / "commit.md").write_text("how to commit", encoding="utf-8")
-    (skills_dir / "notes.txt").write_text("ignored", encoding="utf-8")
-
-    section = SkillProvider(skills_dir).provide()
+def test_skill_provider_lists_discovered_skills() -> None:
+    skills = (
+        Skill(name="commit", description="Write commits", directory=Path("/s/commit")),
+        Skill(name="deploy", description="Ship the app", directory=Path("/s/deploy")),
+    )
+    section = SkillProvider(skills).provide()
     assert section is not None
     assert section.startswith("# Skills")
-    assert section.index("commit") < section.index("deploy")
-    assert str(skills_dir / "deploy.md") in section
-    assert "notes" not in section
+    assert "invoke the `skill` tool" in section
+    assert "- commit: Write commits" in section
+    assert "- deploy: Ship the app" in section
 
 
-def test_skill_provider_missing_or_empty_returns_none(tmp_path: Path) -> None:
-    assert SkillProvider(tmp_path / "skills").provide() is None
-    (tmp_path / "skills").mkdir()
-    assert SkillProvider(tmp_path / "skills").provide() is None
+def test_skill_provider_hides_unlisted_and_empty() -> None:
+    assert SkillProvider(()).provide() is None
+    unlisted = Skill(
+        name="manual", description="d", directory=Path("/s/manual"), listed=False
+    )
+    assert SkillProvider((unlisted,)).provide() is None
 
 
 def test_memory_provider(tmp_path: Path) -> None:

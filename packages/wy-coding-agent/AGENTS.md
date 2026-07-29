@@ -4,7 +4,7 @@
 
 ## Factory（组装入口）
 
-- `factory.py` 是组装的唯一入口，两层：`bootstrap(session_id=None, *, config_path=None)` 一站式组装——`load_config` 构造 `AnthropicModel` → 内置 `DEFAULT_TOOLS` → `load_compaction_config` → `create_agent`（`mcp_config` 即同一 config.toml，`[anthropic]`/`[compaction]`/`[[mcp.servers]]` 共用这一份文件），TUI 等宿主用它；`create_agent(session_id=None, *, model, instruction=None, tools=None, prompt_providers=None, workspace=None, sessions_dir=None, compaction=None, mcp_config=None, audit=True)` 为可编程组装点。session_id 传入则恢复会话、省略则自动生成 UUID。恢复语义：`SessionStore.conversation_messages()` 把已完成的问答对回灌 `wy_core.Session`，累计用量与上下文规模一并恢复,未完成回合不回灌。审计默认开启,写会话文件同目录的 `<session_id>.audit.jsonl`(`audit=False` 关闭);压缩参数经 `CompactionConfig` 透传给 `wy_core.Session`。外部（含 TUI）一律经这两个入口创建 agent，不手工拼装 Agent/SessionStore。
+- `factory.py` 是组装的唯一入口，两层：`bootstrap(session_id=None, *, config_path=None)` 一站式组装——`load_config` 构造 `AnthropicModel` → 内置 `DEFAULT_TOOLS` → `load_compaction_config` → `create_agent`（`mcp_config` 即同一 config.toml，`[anthropic]`/`[compaction]`/`[skills]`/`[[mcp.servers]]` 共用这一份文件；skills 目录取 `load_skills_config`，未配置时用 `default_skills_dirs()` 官方默认，`dirs = []` 显式关闭），TUI 等宿主用它；`create_agent(session_id=None, *, model, instruction=None, tools=None, prompt_providers=None, workspace=None, sessions_dir=None, compaction=None, mcp_config=None, skills_dirs=None, audit=True)` 为可编程组装点。session_id 传入则恢复会话、省略则自动生成 UUID。恢复语义：`SessionStore.conversation_messages()` 把已完成的问答对回灌 `wy_core.Session`，累计用量与上下文规模一并恢复,未完成回合不回灌。审计默认开启,写会话文件同目录的 `<session_id>.audit.jsonl`(`audit=False` 关闭);压缩参数经 `CompactionConfig` 透传给 `wy_core.Session`。外部（含 TUI）一律经这两个入口创建 agent，不手工拼装 Agent/SessionStore。
 
 ## AnthropicModel
 
@@ -12,7 +12,7 @@
 
 ## 工具体系
 
-- 工具体系在 `tools/`：内置工具每个一个子模块（`bash.py`、`glob.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），一律直接继承 `wy_core.Tool` 定义工具类（`name`/`description`/`parameters` 类属性 + `execute` 方法）并给出模块级实例——`__init__.py` 自动扫描收集实例为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含模块级 Tool 实例的模块（共享辅助如 `files.py`、`ripgrep.py`，或只有类的 `mcp_tool.py`）可以并存，扫描自然跳过。`mcp_tool.py` 的 `MCPTool` 是 MCP 工具执行器，由 `mcp.py` 桥接层按连接构造，不进 `DEFAULT_TOOLS`。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
+- 工具体系在 `tools/`：内置工具每个一个子模块（`bash.py`、`glob.py`、`grep.py`、`read.py`、`edit.py`、`write.py`），一律直接继承 `wy_core.Tool` 定义工具类（`name`/`description`/`parameters` 类属性 + `execute` 方法）并给出模块级实例——`__init__.py` 自动扫描收集实例为 `DEFAULT_TOOLS`（同名不同实例导入期报错），新增内置工具不需要手工注册；不含模块级 Tool 实例的模块（共享辅助如 `files.py`、`ripgrep.py`，或只有类的 `mcp_tool.py`/`skill.py`）可以并存，扫描自然跳过。`mcp_tool.py` 的 `MCPTool` 是 MCP 工具执行器，由 `mcp.py` 桥接层按连接构造；`skill.py` 的 `SkillTool` 是 Agent Skills 执行器，由 factory 按 `skills.py` 发现结果构造；两者均不进 `DEFAULT_TOOLS`。执行语义由 wy-core 统一：同步执行器经 `asyncio.to_thread` 调用、失败转 `Error: ...` 的 tool_result 不中断回合。
 - `bash` 工具：持久 bash 会话挂在工具实例上（`DEFAULT_TOOLS` 每进程一份实例，惰性启动、stderr 并入 stdout、独立进程组），哨兵行捕获输出与退出码；`restart=true` 重建会话；超时（默认 120s）或会话意外退出时 kill 进程组、下次惰性重建；输出截断 200 行 / 30000 字符、读取阶段 1MB 捕获上限。安全措施：执行前经 `validate_command` 校验——shlex 解析后按 `ALLOWED_COMMANDS` 白名单放行首 token，拒绝独立 shell 运算符与 `$`/反引号展开；校验是绊线不是边界，无沙箱。审计经 `logging`（`...tools.bash` logger）记录所有命令。
 - `grep` 工具：shell out 到真实 ripgrep（定位与调用 `rg` 的辅助在 `ripgrep.py`，与 glob 工具共享），搜索语义即 rg 语义；harness 层做三种 `output_mode`、分页（`head_limit` 默认 250、`offset`）、路径相对化；固定 `--hidden`、排除 VCS 目录、30000 字符上限、30s 超时（超时抛错不静默返回空）。
 - `glob` 工具：按文件名模式找文件（对齐 Claude Code GlobTool）。`rg --files` 枚举候选（尊重 .gitignore、含隐藏文件、排除 VCS 目录），模式匹配在 harness 侧用自带的 gitignore 风格 glob→regex 翻译完成——不能用 rg 的 `--glob`，inclusion glob 会 override ignore 规则、把被忽略文件带回来。无斜杠模式匹配任意深度的文件名，含斜杠模式匹配相对搜索根的路径，`**` 跨零或多层目录；mtime 最新在前（同 grep 文件列表）、路径相对化、上限 100 条附截断提示；`path` 必须是存在的目录（缺失/非目录报错）。
@@ -27,9 +27,16 @@
 
 - MCP 拆桥接与执行两层。`mcp.py` 的 `MCPClientManager` 只做桥接：TOML `[[mcp.servers]]` 配置（stdio/http 两种 transport），SDK 全 async 且 session 是 task 作用域 context manager——manager 用专用后台线程跑独立 event loop，管连接生命周期与 `mcp__<server>__<tool>` 命名，按连接构造 `MCPTool` 并入工具集；`start()` 阻塞至各 server 就绪或超时（失败记 warning 跳过，不阻断启动），组装后显式查重工具名（冲突抛 ConfigError）。执行在 `tools/mcp_tool.py` 的 `MCPTool`：经构造期注入的桥接侧 `acquire()` 取当前 (session, loop)（未连接/已关闭抛 RuntimeError），`run_coroutine_threadsafe(...).result(120s)` 桥进后台 loop，`result_to_text` 把 CallToolResult 翻译成文本（server 侧 isError → raise，由 wy-core 循环统一转 `Error: ...`）；该模块不 import MCP SDK。测试用 `sys.executable -c` 内联 FastMCP 脚本起真实 stdio server 做全链路验证。
 
+## Skills（Agent Skills）
+
+- 对齐 Anthropic Agent Skills 规范（agentskills.io / 官方文档）的应用侧实现，三级渐进披露：系统提示只列 name+description（L1，`SkillProvider`）；模型经 `skill` 工具加载 SKILL.md 正文（L2，`tools/skill.py` 的 `SkillTool`）；随包文件（参考文档/脚本）由模型用 read/glob/bash 工具按需取用（L3）。用户在输入框敲 `/name args` 不需要 TUI 特判——系统提示与工具描述已注明该语法即调用请求，模型自行调 `skill` 工具。
+- `skills.py` 负责发现与渲染：每个 skill 是含 `SKILL.md` 的目录；`discover_skills(dirs)` 目录顺序即优先级、同名先者胜，skill 名取目录名（对齐 Claude Code，frontmatter `name` 仅展示用、当前忽略），description 缺省取正文首个非标题段落、清单截 1536 字符；`disable-model-invocation: true` 的 skill 不进系统提示但仍可经工具调用；坏 skill 记 warning 跳过不阻断启动。frontmatter 解析是手写 YAML 子集（顶层 `key: value`、引号值、`>`/`|` 块标量），列表/嵌套字段一律忽略，不引入 yaml 依赖。
+- `render_skill` 每次调用重读 SKILL.md（编辑即时生效），替换 `$ARGUMENTS`（无占位符且有参数时文末追加 `ARGUMENTS: <args>`）与 `${CLAUDE_SKILL_DIR}`（兼容现有 Claude skills），结果头部携带 skill 目录供模型解析相对路径。
+- 组装语义同 MCP：`create_agent(skills_dirs=...)` 显式传目录才启用（None 即关闭）；`bootstrap` 默认启用官方目录 `default_skills_dirs()`——`~/.claude/skills`（个人）优先于 `CWD/.claude/skills`（项目），对齐官方"个人覆盖项目"的优先级。`SkillTool` 与 `MCPTool` 同型：模块只有类、无模块级实例，不进 `DEFAULT_TOOLS`，由 factory 按发现结果构造并参与工具名查重。
+
 ## System prompt 组装
 
-- `prompt_template.py` 的 `build_prompt(instruction, providers)` 统一组装 system prompt：instruction 首段 + 各 `BasePromptProvider` 段落（`ModelProvider`/`WorkspaceProvider`/`AgentMDProvider`/`SkillProvider`/`MemoryProvider`），`provide()` 返回 None 跳过且不得因来源缺失抛异常。注意与 `wy_core.Model` 是两套体系。工具 schema 经 API `tools` 参数传递，不拼入 system prompt。
+- `prompt_template.py` 的 `build_prompt(instruction, providers)` 统一组装 system prompt：instruction 首段 + 各 `BasePromptProvider` 段落（`ModelProvider`/`WorkspaceProvider`/`AgentMDProvider`/`SkillProvider`/`MemoryProvider`），`provide()` 返回 None 跳过且不得因来源缺失抛异常。`SkillProvider` 接收 factory 发现的 `Skill` 元组、只列 `listed` 条目；`default_prompt_providers(model, workspace, skills=())` 由 `create_agent` 传入 skills。注意与 `wy_core.Model` 是两套体系。工具 schema 经 API `tools` 参数传递，不拼入 system prompt。
 
 ## TUI 展示层
 

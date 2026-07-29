@@ -8,4 +8,5 @@ dev = ["pytest>=8.0", "httpx>=0.27"]
 testpaths = [
     "packages/wy-core/tests",
     "packages/wy-coding-agent/tests",
+    "packages/wy-realtime-agent/tests",
 ]

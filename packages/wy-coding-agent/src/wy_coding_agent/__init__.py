@@ -17,6 +17,7 @@ from wy_coding_agent.config import (
     load_compaction_config,
     load_config,
     load_mcp_config,
+    load_skills_config,
 )
 from wy_coding_agent.conversation import ConversationService
 from wy_coding_agent.factory import bootstrap, create_agent
@@ -36,7 +37,9 @@ from wy_coding_agent.session import (
     SessionRecord,
     SessionStore,
 )
+from wy_coding_agent.skills import Skill, default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
+from wy_coding_agent.tools.skill import SkillTool
 
 __all__ = [
     "AgentMDProvider",
@@ -55,13 +58,18 @@ __all__ = [
     "SessionError",
     "SessionRecord",
     "SessionStore",
+    "Skill",
     "SkillProvider",
+    "SkillTool",
     "WorkspaceProvider",
     "bootstrap",
     "build_prompt",
     "create_agent",
     "default_prompt_providers",
+    "default_skills_dirs",
+    "discover_skills",
     "load_compaction_config",
     "load_config",
     "load_mcp_config",
+    "load_skills_config",
 ]

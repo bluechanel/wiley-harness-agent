@@ -64,3 +64,43 @@ def test_create_agent_can_disable_audit(tmp_path: Path) -> None:
     drain(service)
     assert not (tmp_path / f"{service.session_id}.audit.jsonl").exists()
     service.close()
+
+
+def test_create_agent_wires_skills(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "my-skills" / "deploy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\ndescription: Ship the app to production.\n---\nRun deploy steps.",
+        encoding="utf-8",
+    )
+    model = FakeModel([[make_text_end("答")]])
+    service = create_agent(
+        model=model,
+        tools=(),
+        sessions_dir=tmp_path / "sessions",
+        skills_dirs=(tmp_path / "my-skills",),
+        workspace=tmp_path,
+        audit=False,
+    )
+    drain(service)
+
+    assert [tool.name for tool in model.calls[0]["tools"]] == ["skill"]
+    system = model.calls[0]["system"] or ""
+    assert "# Skills" in system
+    assert "- deploy: Ship the app to production." in system
+    service.close()
+
+
+def test_create_agent_without_skills_dirs_has_no_skill_tool(tmp_path: Path) -> None:
+    model = FakeModel([[make_text_end("答")]])
+    service = create_agent(
+        model=model,
+        tools=(),
+        sessions_dir=tmp_path,
+        workspace=tmp_path,
+        audit=False,
+    )
+    drain(service)
+    assert model.calls[0]["tools"] is None  # skills_dirs=None 即不启用
+    assert "# Skills" not in (model.calls[0]["system"] or "")
+    service.close()

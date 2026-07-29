@@ -10,6 +10,8 @@ from datetime import date
 from pathlib import Path
 import platform
 
+from wy_coding_agent.skills import Skill
+
 
 class BasePromptProvider(ABC):
     """Contract for one system prompt section."""
@@ -84,29 +86,28 @@ class AgentMDProvider(BasePromptProvider):
 
 
 class SkillProvider(BasePromptProvider):
-    """List skill files for on-demand reading.
+    """List discovered agent skills(L1 元数据,渐进披露的第一级)。
 
-    骨架实现：扫描目录下的 ``*.md`` 并列出名称与路径，模型按需用文件工具
-    读取全文；注入格式后续再迭代。
+    只注入 name + description；模型经 ``skill`` 工具按需加载正文（L2），
+    随包文件用 read/glob/bash 工具取用（L3）。``listed=False`` 的 skill
+    不进清单（仍可经工具调用，供用户 ``/name`` 显式触发）。
     """
 
-    def __init__(self, skills_dir: Path) -> None:
-        self._skills_dir = skills_dir.expanduser()
+    def __init__(self, skills: Sequence[Skill]) -> None:
+        self._skills = tuple(skill for skill in skills if skill.listed)
 
     def provide(self) -> str | None:
-        try:
-            skill_files = sorted(
-                path for path in self._skills_dir.glob("*.md") if path.is_file()
-            )
-        except OSError:
+        if not self._skills:
             return None
-        if not skill_files:
-            return None
-        entries = "\n".join(f"- {path.stem}: {path}" for path in skill_files)
+        entries = "\n".join(
+            f"- {skill.name}: {skill.description}" for skill in self._skills
+        )
         return (
             "# Skills\n\n"
-            "The following skill files are available. When a task matches one, "
-            "read its full content with your file tools before proceeding:\n"
+            "The following skills are available. When a task matches one, "
+            "invoke the `skill` tool with its name to load the full "
+            "instructions before proceeding; a user message starting with "
+            '"/<name>" is an explicit request to invoke that skill:\n'
             f"{entries}"
         )
 
@@ -130,14 +131,19 @@ class MemoryProvider(BasePromptProvider):
 def default_prompt_providers(
     model: str = "",
     workspace: Path | None = None,
+    skills: Sequence[Skill] = (),
 ) -> tuple[BasePromptProvider, ...]:
-    """Assemble the default provider chain used by `create_agent`."""
+    """Assemble the default provider chain used by `create_agent`.
+
+    skills 为已发现的 Skill 元组（`wy_coding_agent.skills.discover_skills`
+    的结果，由 factory 传入），缺省为空即不注入 Skills 段。
+    """
     root = (workspace or Path.cwd()).expanduser()
     return (
         ModelProvider(model),
         WorkspaceProvider(root),
         AgentMDProvider(root),
-        SkillProvider(root / "skills"),
+        SkillProvider(skills),
         MemoryProvider(root / "MEMORY.md"),
     )
 

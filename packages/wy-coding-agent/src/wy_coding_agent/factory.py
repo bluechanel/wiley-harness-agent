@@ -12,6 +12,7 @@ from wy_coding_agent.config import (
     load_compaction_config,
     load_config,
     load_mcp_config,
+    load_skills_config,
 )
 from wy_coding_agent.conversation import ConversationService
 from wy_coding_agent.mcp import MCPClientManager
@@ -21,7 +22,9 @@ from wy_coding_agent.prompt_template import (
     default_prompt_providers,
 )
 from wy_coding_agent.session import SessionStore
+from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
+from wy_coding_agent.tools.skill import SkillTool
 
 
 def bootstrap(
@@ -32,11 +35,13 @@ def bootstrap(
     """One-stop assembly: read config.toml and return a ready-to-use agent.
 
     config_path 缺省为调用方 CWD 的 config.toml，显式传参可覆盖。同一份文件
-    提供 [anthropic]（模型构造参数，必填段）、[compaction]（可选）与
-    [[mcp.servers]]（可选）配置。组装内容：`load_config` 构造
+    提供 [anthropic]（模型构造参数，必填段）、[compaction]（可选）、[skills]
+    （可选）与 [[mcp.servers]]（可选）配置。组装内容：`load_config` 构造
     `AnthropicModel`、内置工具集 `DEFAULT_TOOLS`、`load_compaction_config`
     的压缩参数，最终交给 `create_agent`（mcp_config 即同一配置文件）。
-    session_id 语义同 `create_agent`。配置/连接失败抛
+    skills 目录取 `load_skills_config`；未配置时用 `default_skills_dirs()`
+    的官方默认（`~/.claude/skills` 优先于 `CWD/.claude/skills`），
+    `dirs = []` 显式关闭。session_id 语义同 `create_agent`。配置/连接失败抛
     ConfigError/ModelError/SessionError，由调用方处理。
     需要自定义模型、工具集或提示词组合时，直接使用 `create_agent`。
     """
@@ -49,12 +54,14 @@ def bootstrap(
         max_tokens=config.max_tokens,
         thinking_budget_tokens=config.thinking_budget_tokens,
     )
+    skills_dirs = load_skills_config(config_path)
     return create_agent(
         session_id,
         model=model,
         tools=DEFAULT_TOOLS,
         compaction=load_compaction_config(config_path),
         mcp_config=config_path,
+        skills_dirs=skills_dirs if skills_dirs is not None else default_skills_dirs(),
     )
 
 
@@ -69,6 +76,7 @@ def create_agent(
     sessions_dir: Path | None = None,
     compaction: CompactionConfig | None = None,
     mcp_config: Path | None = None,
+    skills_dirs: Sequence[Path] | None = None,
     audit: bool = True,
 ) -> ConversationService:
     """Create an agent backed by a durable session.
@@ -78,17 +86,22 @@ def create_agent(
     宿主按 `wy_core.Model` 契约实现后注入，厂商参数在构造期给定。
     tools 按 `wy_core.Tool` 契约编写后传入，省略时无本地工具（仅配置的
     MCP 工具可用）；prompt_providers 省略时使用
-    default_prompt_providers(model.name, workspace) 的默认组合；
+    default_prompt_providers(model.name, workspace, skills) 的默认组合；
     sessions_dir 省略时写入当前目录 .agent_session/。mcp_config 为 MCP
     配置文件路径（TOML 的 [[mcp.servers]] 段），None 即不启用 MCP，传入时
     文件必须存在且合法；其中的 server 工具以 mcp__<server>__<tool> 名称
-    并入工具集，连接失败的 server 记 warning 并跳过。compaction 控制
+    并入工具集，连接失败的 server 记 warning 并跳过。skills_dirs 为
+    Agent Skills 目录列表（每个子目录一个 `<name>/SKILL.md`，顺序即优先
+    级、同名先者胜），None 即不启用 skills（与 mcp_config 同语义，官方
+    默认目录见 `default_skills_dirs()`）；发现的 skills 经 `skill` 工具
+    按需加载、清单由 SkillProvider 注入系统提示。compaction 控制
     wy-core 的自动上下文压缩阈值，None 即默认值。审计日志默认写入会话文件
     同目录的 <session_id>.audit.jsonl，audit=False 关闭。
     调用方结束后应调用返回值的 close() 释放连接。
     """
     compaction = compaction if compaction is not None else CompactionConfig()
     mcp_servers = load_mcp_config(mcp_config) if mcp_config is not None else ()
+    skills = discover_skills(skills_dirs) if skills_dirs is not None else ()
 
     store = SessionStore(session_id, sessions_dir=sessions_dir)
     base_tools = () if tools is None else tuple(tools)
@@ -97,6 +110,8 @@ def create_agent(
         mcp_manager = MCPClientManager(mcp_servers)
         mcp_manager.start()
     all_tools = base_tools + (mcp_manager.tools if mcp_manager else ())
+    if skills:
+        all_tools = all_tools + (SkillTool(skills),)
     names = [tool.name for tool in all_tools]
     duplicates = {name for name in names if names.count(name) > 1}
     if duplicates:
@@ -120,7 +135,7 @@ def create_agent(
             system=build_prompt(
                 instruction,
                 (
-                    default_prompt_providers(model.name, workspace)
+                    default_prompt_providers(model.name, workspace, skills)
                     if prompt_providers is None
                     else tuple(prompt_providers)
                 ),

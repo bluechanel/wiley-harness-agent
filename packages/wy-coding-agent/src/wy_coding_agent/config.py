@@ -1,4 +1,4 @@
-"""config.toml 解析:[anthropic]、[compaction] 与 [[mcp.servers]]。"""
+"""config.toml 解析:[anthropic]、[compaction]、[skills] 与 [[mcp.servers]]。"""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -103,6 +103,33 @@ def load_compaction_config(path: Path | None = None) -> CompactionConfig:
     return CompactionConfig(
         max_context_tokens=max_context_tokens, keep_recent=keep_recent
     )
+
+
+def load_skills_config(path: Path | None = None) -> tuple[Path, ...] | None:
+    """Load the optional [skills] section: the skill directory search path.
+
+    缺文件/缺段/缺 dirs 返回 None(调用方用官方默认目录);``dirs = []``
+    显式关闭 skills。目录顺序即优先级(同名 skill 先者胜),``~`` 展开,
+    相对路径按调用方 CWD 解析。
+    """
+    path = path if path is not None else Path.cwd() / "config.toml"
+    try:
+        with path.open("rb") as config_file:
+            config = tomllib.load(config_file)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return None
+
+    skills_config = config.get("skills")
+    if not isinstance(skills_config, dict):
+        return None
+    dirs = skills_config.get("dirs")
+    if dirs is None:
+        return None
+    if not isinstance(dirs, list) or not all(
+        isinstance(entry, str) and entry.strip() for entry in dirs
+    ):
+        raise ConfigError("配置项 skills.dirs 必须是非空字符串数组。")
+    return tuple(Path(entry.strip()).expanduser() for entry in dirs)
 
 
 @dataclass(frozen=True, slots=True)
