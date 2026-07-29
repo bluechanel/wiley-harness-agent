@@ -144,13 +144,15 @@ class Agent:
                     )
                     return
 
-                results = []
-                for block in tool_uses:  # 顺序执行,结果顺序与调用顺序一致
+                for block in tool_uses:
                     yield ToolCall(id=block.id, name=block.name, input=block.input)
                     self._audit(
                         "tool_call", {"id": block.id, "name": block.name, "input": block.input}
                     )
-                    content, is_error = await self._execute(block)
+                # 并发执行全部调用;事件与回填顺序仍与调用顺序一致
+                outcomes = await asyncio.gather(*(self._execute(b) for b in tool_uses))
+                results = []
+                for block, (content, is_error) in zip(tool_uses, outcomes):
                     yield ToolResult(id=block.id, name=block.name, content=content, is_error=is_error)
                     self._audit(
                         "tool_result",

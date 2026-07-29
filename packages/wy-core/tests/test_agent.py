@@ -76,6 +76,43 @@ def test_工具抛错不中断回合():
     assert isinstance(events[-1], TurnEnd)  # 回合正常走完
 
 
+def test_多工具并行执行():
+    import threading
+
+    from wy_core import Tool
+
+    barrier = threading.Barrier(2)  # 两个工具必须同时在跑才能都通过
+
+    class MeetTool(Tool):
+        name = "meet"
+        description = "在栅栏处会合"
+        parameters = {"type": "object", "properties": {}}
+
+        def execute(self, input: dict) -> str:
+            barrier.wait(timeout=5)
+            return "met"
+
+    model = FakeModel(
+        [
+            [
+                end_event(
+                    ToolUseBlock(id="t1", name="meet", input={}),
+                    ToolUseBlock(id="t2", name="meet", input={}),
+                    stop_reason="tool_use",
+                )
+            ],
+            [make_text_end("完")],
+        ]
+    )
+    agent = Agent(model=model, tools=[MeetTool()], audit=None)
+    events = run_events(agent, "并行")
+
+    # 先产出全部 ToolCall,再按调用顺序产出 ToolResult
+    assert [type(e) for e in events] == [ToolCall, ToolCall, ToolResult, ToolResult, TurnEnd]
+    assert [e.id for e in events[:4]] == ["t1", "t2", "t1", "t2"]
+    assert all(r.content == "met" and not r.is_error for r in events[2:4])
+
+
 def test_未知工具名():
     model = FakeModel(
         [

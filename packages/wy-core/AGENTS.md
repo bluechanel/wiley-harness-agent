@@ -16,7 +16,7 @@
 - `model.py` `Model` 抽象父类:`stream(messages, *, system, tools) -> AsyncIterator[ModelEvent]` 签名固定,厂商参数全部在实现类构造期注入。事件仅 `TextDelta`/`ThinkingDelta`/`ModelEnd` 三种:增量只供实时渲染,**实现方负责组装完整 assistant 消息放进 `ModelEnd`**(刻意取舍:核心不做 JSON 增量拼装,厂商特有字段如 thinking signature 封在实现内;参考实现见 wy-coding-agent 的 `AnthropicModel`);`stop_reason == "tool_use"` 驱动工具循环,其余取值一律回合结束;传输/解码/流内错误一律 raise `ModelError`。
 - `session.py` 内存态上下文(落盘与恢复由使用方实现):消息列表、`context_tokens`(最近一次请求的上下文规模)与 `total_usage`(累计);`needs_compaction`/`compact` 实现自动压缩——保留最近 `keep_recent` 条(分割点前移保证不拆散 tool_use/tool_result 对),更早历史转写为纯文本请模型总结,替换为一条 `[早前对话摘要]` user 消息,`context_tokens` 归零待下轮刷新。
 - `log.py` `AuditLog` 审计日志:append-only JSONL、逐条 flush(不 fsync)、`ensure_ascii=False`;记录语义事件(`agent_start`/`request`/`model_end`/`tool_call`/`tool_result`/`compaction`/`error`),不逐 delta 留痕。默认路径为调用方 CWD 的 `.wy_audit/`,可显式传 path 覆盖。
-- `agent.py` `Agent` 循环:压缩检查(只发生在两次请求之间)→ 模型流(增量原样透出,捕获 `ModelEnd`)→ 顺序执行 tool_use → 结果并成一条 user 消息回填,直到非 `tool_use` 以 `TurnEnd` 收尾;`max_iterations` 是失控循环保险丝,超限抛 `AgentError`。回合内任何异常(含消费方中途关闭流):统一在出口写一条 error 审计,并回滚本回合追加的消息保持会话完整(本回合已压缩过则历史结构已变,跳过回滚)。审计默认开启(省略 `audit` 参数),显式 `audit=None` 关闭;单实例不支持并发 `run`。
+- `agent.py` `Agent` 循环:压缩检查(只发生在两次请求之间)→ 模型流(增量原样透出,捕获 `ModelEnd`)→ 并发执行 tool_use(先按调用顺序产出全部 `ToolCall`,`asyncio.gather` 并发执行,再按调用顺序产出 `ToolResult`)→ 结果并成一条 user 消息回填,直到非 `tool_use` 以 `TurnEnd` 收尾;`max_iterations` 是失控循环保险丝,超限抛 `AgentError`。回合内任何异常(含消费方中途关闭流):统一在出口写一条 error 审计,并回滚本回合追加的消息保持会话完整(本回合已压缩过则历史结构已变,跳过回滚)。审计默认开启(省略 `audit` 参数),显式 `audit=None` 关闭;单实例不支持并发 `run`。
 
 ## 消费方接入示例
 
