@@ -84,7 +84,7 @@ def test_create_agent_wires_skills(tmp_path: Path) -> None:
     )
     drain(service)
 
-    assert [tool.name for tool in model.calls[0]["tools"]] == ["skill"]
+    assert [tool.name for tool in model.calls[0]["tools"]] == ["skill", "agent"]
     system = model.calls[0]["system"] or ""
     assert "# Skills" in system
     assert "- deploy: Ship the app to production." in system
@@ -101,6 +101,7 @@ def test_create_agent_without_skills_dirs_has_no_skill_tool(tmp_path: Path) -> N
         audit=False,
     )
     drain(service)
-    assert model.calls[0]["tools"] is None  # skills_dirs=None 即不启用
+    # skills_dirs=None 即不启用 skill;agent 工具总是装配
+    assert [tool.name for tool in model.calls[0]["tools"]] == ["agent"]
     assert "# Skills" not in (model.calls[0]["system"] or "")
     service.close()

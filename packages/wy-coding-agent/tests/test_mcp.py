@@ -246,7 +246,7 @@ def test_create_agent_converts_mcp_config_servers_into_tools(tmp_path: Path) -> 
         sessions_dir=tmp_path / "sessions",
     )
     try:
-        assert set(agent._agent.tools) == {"mcp__demo__add", "mcp__demo__boom"}
+        assert set(agent._agent.tools) == {"mcp__demo__add", "mcp__demo__boom", "agent"}
     finally:
         agent.close()
 

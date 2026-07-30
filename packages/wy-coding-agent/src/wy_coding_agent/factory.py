@@ -24,6 +24,7 @@ from wy_coding_agent.prompt_template import (
 from wy_coding_agent.session import SessionStore
 from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
+from wy_coding_agent.tools.agent_tool import AgentTool
 from wy_coding_agent.tools.skill import SkillTool
 
 
@@ -85,7 +86,9 @@ def create_agent(
     用量与上下文规模一并恢复）；省略时自动生成 UUID 新会话。model 必填：
     宿主按 `wy_core.Model` 契约实现后注入，厂商参数在构造期给定。
     tools 按 `wy_core.Tool` 契约编写后传入，省略时无本地工具（仅配置的
-    MCP 工具可用）；prompt_providers 省略时使用
+    MCP 工具可用）；名为 `agent` 的子 agent 派生工具总是额外装配（复用
+    同一 model 与既有工具集，见 `tools/agent_tool.py`）。prompt_providers
+    省略时使用
     default_prompt_providers(model.name, workspace, skills) 的默认组合；
     sessions_dir 省略时写入当前目录 .agent_session/。mcp_config 为 MCP
     配置文件路径（TOML 的 [[mcp.servers]] 段），None 即不启用 MCP，传入时
@@ -112,6 +115,25 @@ def create_agent(
     all_tools = base_tools + (mcp_manager.tools if mcp_manager else ())
     if skills:
         all_tools = all_tools + (SkillTool(skills),)
+    system = build_prompt(
+        instruction,
+        (
+            default_prompt_providers(model.name, workspace, skills)
+            if prompt_providers is None
+            else tuple(prompt_providers)
+        ),
+    )
+    # agent 工具持有追加前的工具集快照:子 agent 不含 agent 工具,杜绝嵌套派生。
+    all_tools = all_tools + (
+        AgentTool(
+            model=model,
+            tools=all_tools,
+            system=system,
+            audit_base=store.path.with_suffix("") if audit else None,
+            max_context_tokens=compaction.max_context_tokens,
+            keep_recent=compaction.keep_recent,
+        ),
+    )
     names = [tool.name for tool in all_tools]
     duplicates = {name for name in names if names.count(name) > 1}
     if duplicates:
@@ -132,14 +154,7 @@ def create_agent(
         agent = Agent(
             model=model,
             tools=all_tools,
-            system=build_prompt(
-                instruction,
-                (
-                    default_prompt_providers(model.name, workspace, skills)
-                    if prompt_providers is None
-                    else tuple(prompt_providers)
-                ),
-            ),
+            system=system,
             session=session,
             audit=(
                 AuditLog(store.path.with_suffix(".audit.jsonl")) if audit else None
