@@ -5,15 +5,16 @@ import asyncio
 import json
 from collections.abc import Sequence
 
-from wy_core import ToolCall, ToolResult
-
-from wy_realtime_agent.agent import (
+from wy_core import (
     AssistantTranscript,
     Interrupted,
     RealtimeAgent,
     SessionEnded,
+    ToolCall,
+    ToolResult,
     UserTranscript,
 )
+
 from wy_realtime_agent.config import ConfigError
 from wy_realtime_agent.factory import bootstrap
 

@@ -12,9 +12,11 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-from wy_realtime_agent.agent import RealtimeAgent, RealtimeEvent
+from wy_core import RealtimeAgent, RealtimeEvent
+
 from wy_realtime_agent.config import RealtimeConfig
 from wy_realtime_agent.protocol import RealtimeClient
+from wy_realtime_agent.qwen import QwenRealtimeModel
 
 _WAIT_TIMEOUT_SECONDS = 5.0
 
@@ -136,16 +138,17 @@ def make_agent(
     speaker: FakeSpeaker | None = None,
     audit=None,
 ) -> tuple[RealtimeAgent, FakeWebSocket]:
-    """组装接假 ws/音频的 RealtimeAgent;audit 缺省关闭,避免污染 CWD。"""
+    """组装接假 ws/音频的 QwenRealtimeModel + RealtimeAgent;audit 缺省关闭,避免污染 CWD。"""
     config = config if config is not None else make_config()
     ws = FakeWebSocket(script)
     client = RealtimeClient(config.url, config.api_key, config.model, connect=ws.connector())
     agent = RealtimeAgent(
-        client=client,
-        config=config,
+        model=QwenRealtimeModel(config, client=client),
         tools=tools,
+        system=config.instructions or None,
         mic=mic if mic is not None else FakeMic(),
         speaker=speaker if speaker is not None else FakeSpeaker(),
+        echo_suppression=config.echo_suppression,
         audit=audit,
     )
     return agent, ws

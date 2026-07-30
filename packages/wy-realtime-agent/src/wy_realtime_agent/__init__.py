@@ -1,22 +1,27 @@
-"""wy-realtime-agent:基于 wy-core 的实时语音 agent 应用。
+"""wy-realtime-agent:wy-core realtime 契约的 Qwen-Audio 具体实现。
 
-由 Qwen-Audio 实时语音大模型驱动,经 WebSocket 全双工协议实现"麦克风流式
-录音 → 服务端 VAD/语义轮次 → 流式语音播放"的实时对话。实时协议是服务端
-维护上下文的推送式流,不走 ``wy_core.Model``/``Agent``/``Session``;复用
-wy-core 的 ``Tool`` 契约(内置 read 工具 + MCP 工具)、``AuditLog`` 审计与
-``ToolCall``/``ToolResult`` 事件词汇。``bootstrap`` 读 config.toml 的
-[realtime] 与 [[mcp.servers]] 一站式组装;``create_agent`` 为可编程组装点。
-控制台入口经 ``wy-realtime-agent`` 命令或 ``wy_realtime_agent.main:main``。
+实时编排(打断、回声抑制、收集式 function calling、send_user_text 后台
+指令注入)在 ``wy_core.RealtimeAgent``;本包提供它的 Qwen 实现件:
+``QwenRealtimeModel``(WebSocket wire 协议 ↔ 类型化事件翻译,协议参考
+包内 realtime_llm_ws.md)、``MicSource``/``SpeakerSink``(wy_core 音频
+契约的 sounddevice 实现,16k 入 / 24k 出)、``[realtime]`` 配置解析与
+MCP 工具桥接(read 内置工具 + MCPTool)。``bootstrap`` 读 config.toml
+的 [realtime] 与 [[mcp.servers]] 一站式组装;``create_agent`` 为可编程
+组装点。控制台入口经 ``wy-realtime-agent`` 命令或
+``wy_realtime_agent.main:main``。编排事件与契约类型(RealtimeAgent、
+RealtimeEvent、RealtimeError 等)从 wy_core re-export 以保持兼容。
 """
 
-from wy_realtime_agent.agent import (
+from wy_core import (
     AssistantTranscript,
     Interrupted,
     RealtimeAgent,
+    RealtimeError,
     RealtimeEvent,
     SessionEnded,
     UserTranscript,
 )
+
 from wy_realtime_agent.audio import MicSource, SpeakerSink
 from wy_realtime_agent.config import (
     ConfigError,
@@ -27,11 +32,8 @@ from wy_realtime_agent.config import (
 )
 from wy_realtime_agent.factory import bootstrap, create_agent
 from wy_realtime_agent.mcp import MCPClientManager
-from wy_realtime_agent.protocol import (
-    RealtimeClient,
-    RealtimeError,
-    build_session_config,
-)
+from wy_realtime_agent.protocol import RealtimeClient, build_session_config
+from wy_realtime_agent.qwen import QwenRealtimeModel
 from wy_realtime_agent.tools import DEFAULT_TOOLS
 
 __all__ = [
@@ -42,6 +44,7 @@ __all__ = [
     "MCPClientManager",
     "MCPServerConfig",
     "MicSource",
+    "QwenRealtimeModel",
     "RealtimeAgent",
     "RealtimeClient",
     "RealtimeConfig",

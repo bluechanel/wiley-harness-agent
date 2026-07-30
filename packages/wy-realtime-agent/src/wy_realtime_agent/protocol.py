@@ -1,8 +1,9 @@
 """Qwen-Audio realtime WebSocket 协议客户端:纯传输层。
 
 只负责建连、客户端事件编码发送与服务端事件解码迭代,不含音频、工具与
-对话策略(那些在 ``wy_realtime_agent.agent``)。连接工厂可注入,测试用
-假 ws 对象(只需 ``send``/``close``/async 迭代)即可全链路验证。
+对话策略(那些在 ``wy_core.RealtimeAgent`` 与本包 ``qwen``)。连接工厂
+可注入,测试用假 ws 对象(只需 ``send``/``close``/async 迭代)即可全链
+路验证。传输失败统一抛 ``wy_core.RealtimeError``(本模块 re-export)。
 """
 
 from __future__ import annotations
@@ -14,17 +15,17 @@ from collections.abc import AsyncIterator, Sequence
 
 import websockets
 
-from wy_core import Tool
+from wy_core import RealtimeError, Tool
 
 from wy_realtime_agent.config import RealtimeConfig
 
-
-class RealtimeError(RuntimeError):
-    """实时连接失败:握手、传输或异常关闭。"""
+__all__ = ["RealtimeClient", "RealtimeError", "build_session_config"]
 
 
-def build_session_config(config: RealtimeConfig, tools: Sequence[Tool]) -> dict:
-    """把 RealtimeConfig 与工具集组装为 session.update 的 session 载荷。
+def build_session_config(
+    config: RealtimeConfig, tools: Sequence[Tool], *, system: str | None = None
+) -> dict:
+    """把 RealtimeConfig、system 指令与工具集组装为 session.update 的 session 载荷。
 
     voice 与 turn_detection 按协议只在首次 session.update 生效;本客户端
     建连后仅发送一次会话配置,天然满足该约束。
@@ -36,8 +37,8 @@ def build_session_config(config: RealtimeConfig, tools: Sequence[Tool]) -> dict:
         "output_audio_format": "pcm",
         "max_history_turns": config.max_history_turns,
     }
-    if config.instructions:
-        session["instructions"] = config.instructions
+    if system:
+        session["instructions"] = system
     if config.mode == "server_vad":
         session["turn_detection"] = {
             "type": "server_vad",

@@ -36,14 +36,14 @@ def test_build_session_config_server_vad() -> None:
         "threshold": 0.3,
         "silence_duration_ms": 600,
     }
-    assert "instructions" not in session  # 空 instructions 不发
+    assert "instructions" not in session  # 未传 system 不发
     assert "tools" not in session  # 无工具不发
 
 
 def test_build_session_config_smart_turn_and_instructions() -> None:
-    config = make_config(mode="smart_turn", instructions="你是语音助手")
+    config = make_config(mode="smart_turn")
 
-    session = build_session_config(config, [])
+    session = build_session_config(config, [], system="你是语音助手")
 
     assert session["turn_detection"] == {"type": "smart_turn"}
     assert session["instructions"] == "你是语音助手"

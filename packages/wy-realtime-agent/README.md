@@ -1,6 +1,6 @@
 # wy-realtime-agent SDK 使用文档
 
-基于 [wy-core](../wy-core) 的实时语音 agent SDK：由 Qwen-Audio 实时语音大模型经 WebSocket 全双工协议驱动，实现"麦克风流式录音 → 服务端 VAD/语义轮次判定 → 流式语音播放"的实时对话，并支持 function calling（内置 read 工具 + MCP 工具 + 自定义工具）、语音打断、回声抑制、后台文字指令注入与 JSONL 审计。
+[wy-core](../wy-core) realtime 契约的 Qwen-Audio 具体实现：由 Qwen-Audio 实时语音大模型经 WebSocket 全双工协议驱动，实现"麦克风流式录音 → 服务端 VAD/语义轮次判定 → 流式语音播放"的实时对话，并支持 function calling（内置 read 工具 + MCP 工具 + 自定义工具）、语音打断、回声抑制、后台文字指令注入与 JSONL 审计。实时编排循环在 `wy_core.RealtimeAgent`；本包提供 Qwen 协议翻译、sounddevice 音频、配置解析与组装。
 
 本文面向把本包当作 SDK 集成到自己应用里的开发者（含 AI 编码助手）。协议细节见包内 [realtime_llm_ws.md](realtime_llm_ws.md)；包内部实现约定见 [AGENTS.md](AGENTS.md)。
 
@@ -8,18 +8,19 @@
 
 ```
 你的应用
-  └─ RealtimeAgent.run()  ← async 事件流（转写/工具/打断/会话结束）
-       ├─ RealtimeClient   WebSocket 传输层（客户端事件编码 / 服务端事件解码）
-       ├─ MicSource        麦克风采集：16kHz int16 单声道，100ms 一块
-       ├─ SpeakerSink      扬声器播放：24kHz int16 单声道
-       └─ Tool[]           wy_core.Tool 契约：内置 read + MCP 工具 + 自定义工具
+  └─ RealtimeAgent.run()      ← async 事件流（转写/工具/打断/会话结束）；编排循环在 wy-core
+       ├─ QwenRealtimeModel   wy_core.RealtimeModel 实现：Qwen wire 事件 ↔ 类型化事件翻译
+       │    └─ RealtimeClient WebSocket 传输层（客户端事件编码 / 服务端事件解码）
+       ├─ MicSource           wy_core.AudioSource 实现：16kHz int16 单声道，100ms 一块
+       ├─ SpeakerSink         wy_core.AudioSink 实现：24kHz int16 单声道
+       └─ Tool[]              wy_core.Tool 契约：内置 read + MCP 工具 + 自定义工具
 ```
 
-关键设计：**对话上下文由服务端维护**，响应由服务端 VAD/语义轮次主动触发（推送式流）。因此本包不使用 `wy_core.Model`/`Agent`/`Session`，只复用 wy-core 的三样东西：
+关键设计：**对话上下文由服务端维护**，响应由服务端 VAD/语义轮次主动触发（推送式流），走 wy-core 的 realtime 契约体系而非 `Model`/`Agent`/`Session` 的拉取式回合契约。分工：
 
-- `wy_core.Tool` —— 工具契约（自定义工具按它编写）；
-- `wy_core.AuditLog` —— JSONL 审计日志；
-- `wy_core.ToolCall` / `wy_core.ToolResult` —— 工具事件数据类（与本包事件共同组成 `RealtimeEvent`）。
+- `wy_core.RealtimeAgent` —— 编排循环（打断、回声抑制、收集式 function calling、`send_user_text` 排队）；契约与编排语义详见 [wy-core README](../wy-core/README.md) 的「Realtime」章；
+- 本包 `QwenRealtimeModel` —— `wy_core.RealtimeModel` 的 Qwen 实现（wire 协议翻译）；`MicSource`/`SpeakerSink` —— `wy_core.AudioSource`/`AudioSink` 的 sounddevice 实现；
+- 事件与契约类型（`RealtimeAgent`/`RealtimeEvent`/`UserTranscript`/`AssistantTranscript`/`Interrupted`/`SessionEnded`/`RealtimeError`）定义在 wy_core，本包 re-export——原 `from wy_realtime_agent import ...` 导入路径继续可用。
 
 ## 安装
 
@@ -197,7 +198,7 @@ MCP 语义：`create_agent` 时后台线程建连（30s 超时），**连接失�
 
 ## 事件参考
 
-`run()` 产出 `RealtimeEvent`，它是六个 dataclass 的联合类型：
+`run()` 产出 `RealtimeEvent`（定义于 wy_core，本包 re-export），它是六个 dataclass 的联合类型：
 
 | 事件 | 字段 | 何时产出 |
 |---|---|---|
@@ -303,15 +304,16 @@ agent = create_agent(config=config, client=client, mic=mic, speaker=speaker, aud
 | 导出 | 说明 |
 |---|---|
 | `bootstrap` / `create_agent` | 组装入口（见上文） |
-| `RealtimeAgent` | 核心编排：`run()` 产出事件流；`send_user_text()` 注入指令；`close()` 释放资源 |
-| `RealtimeEvent` | 事件联合类型 |
-| `UserTranscript` / `AssistantTranscript` / `Interrupted` / `SessionEnded` | 本包事件 dataclass（`ToolCall`/`ToolResult` 从 `wy_core` 导入） |
+| `RealtimeAgent` | 核心编排（wy_core re-export）：`run()` 产出事件流；`send_user_text()` 注入指令；`close()` 释放资源 |
+| `RealtimeEvent` | 事件联合类型（wy_core re-export） |
+| `UserTranscript` / `AssistantTranscript` / `Interrupted` / `SessionEnded` | 事件 dataclass（wy_core re-export；`ToolCall`/`ToolResult` 从 `wy_core` 导入） |
+| `QwenRealtimeModel` | `wy_core.RealtimeModel` 的 Qwen 实现（factory 内部使用；自定义组装/测试用） |
 | `RealtimeConfig` / `load_realtime_config` | `[realtime]` 配置模型与解析 |
 | `MCPServerConfig` / `load_mcp_config` / `MCPClientManager` | MCP 配置与桥接层 |
 | `ConfigError` | 配置错误（`RuntimeError` 子类） |
-| `RealtimeError` | 实时连接错误：握手、传输或异常关闭（`RuntimeError` 子类） |
-| `RealtimeClient` / `build_session_config` | 底层传输客户端与 session.update 载荷组装（高级用法/测试用） |
-| `MicSource` / `SpeakerSink` | 流式音频 IO |
+| `RealtimeError` | 实时连接错误：握手、传输或异常关闭（wy_core re-export，`RuntimeError` 子类） |
+| `RealtimeClient` / `build_session_config` | 底层传输客户端与 session.update 载荷组装（`build_session_config(config, tools, *, system=None)`；高级用法/测试用） |
+| `MicSource` / `SpeakerSink` | 流式音频 IO（`wy_core.AudioSource`/`AudioSink` 实现） |
 | `DEFAULT_TOOLS` | 内置工具元组（目前只有 `read`） |
 
 ## 集成检查单（给 AI 的注意事项）

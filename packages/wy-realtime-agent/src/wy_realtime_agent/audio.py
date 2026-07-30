@@ -1,4 +1,4 @@
-"""流式音频 IO:麦克风采集与扬声器播放。
+"""流式音频 IO:麦克风采集与扬声器播放(wy_core 音频契约的 sounddevice 实现)。
 
 音频规格由协议决定:输入 16kHz、输出 24kHz,均为 16bit 单声道 PCM,按
 100ms 分块。sounddevice(PortAudio)只在缺省流工厂里懒加载,测试注入假
@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 import queue
 import threading
+
+from wy_core import AudioSink, AudioSource
 
 INPUT_RATE = 16_000  # 协议要求:输入 16kHz 16bit 单声道 PCM
 OUTPUT_RATE = 24_000  # 协议要求:输出 24kHz 16bit 单声道 PCM
@@ -43,7 +45,7 @@ def _default_output_stream():
     )
 
 
-class MicSource:
+class MicSource(AudioSource):
     """麦克风流式采集:后台线程阻塞读设备,read() 从队列取 100ms/3200B 一块。
 
     队列满(消费端停摆)时丢最旧块保实时性;stop() 先收线程再关流,
@@ -99,7 +101,7 @@ class MicSource:
             stream.close()
 
 
-class SpeakerSink:
+class SpeakerSink(AudioSink):
     """扬声器流式播放:play() 切块入队,后台线程顺序写设备。
 
     play() 先按 100ms 切块再入队,clear() 打断时只需清队列,残余播放
