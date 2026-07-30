@@ -10,8 +10,13 @@
             case ToolCall(name=name):  ...   # 展示工具调用
             case TurnEnd():            ...   # 回合结束
 
+端到端语音模型同理:继承 ``RealtimeModel`` 适配厂商实时协议(把 wire
+事件翻译为类型化事件)、实现 ``AudioSource``/``AudioSink`` 接音频设备,
+交给 ``RealtimeAgent`` 即得到完整实时语音 agent(打断、回声抑制、
+收集式 function calling、后台文字指令注入)。
+
 会话历史与自动上下文压缩在 ``Session``;审计日志默认写入
-CWD/.wy_audit/(``Agent(audit=None)`` 关闭)。
+CWD/.wy_audit/(``audit=None`` 关闭)。
 """
 
 from wy_core.agent import (
@@ -19,10 +24,9 @@ from wy_core.agent import (
     AgentError,
     AgentEvent,
     Compaction,
-    ToolCall,
-    ToolResult,
     TurnEnd,
 )
+from wy_core.audio import AudioSink, AudioSource
 from wy_core.log import AuditLog
 from wy_core.message import (
     Block,
@@ -42,22 +46,58 @@ from wy_core.model import (
     TextDelta,
     ThinkingDelta,
 )
+from wy_core.realtime_agent import (
+    Interrupted,
+    RealtimeAgent,
+    RealtimeEvent,
+    SessionEnded,
+)
+from wy_core.realtime_model import (
+    AssistantTranscript,
+    AudioDelta,
+    ErrorEvent,
+    FunctionCall,
+    RealtimeError,
+    RealtimeModel,
+    RealtimeModelEvent,
+    ResponseDone,
+    ResponseStarted,
+    SpeechStarted,
+    TurnDiscarded,
+    UserTranscript,
+)
 from wy_core.session import Session
-from wy_core.tool import Tool
+from wy_core.tool import Tool, ToolCall, ToolResult
 
 __all__ = [
     "Agent",
     "AgentError",
     "AgentEvent",
+    "AssistantTranscript",
+    "AudioDelta",
+    "AudioSink",
+    "AudioSource",
     "AuditLog",
     "Block",
     "Compaction",
+    "ErrorEvent",
+    "FunctionCall",
+    "Interrupted",
     "Message",
     "Model",
     "ModelEnd",
     "ModelError",
     "ModelEvent",
+    "RealtimeAgent",
+    "RealtimeError",
+    "RealtimeEvent",
+    "RealtimeModel",
+    "RealtimeModelEvent",
+    "ResponseDone",
+    "ResponseStarted",
     "Session",
+    "SessionEnded",
+    "SpeechStarted",
     "TextBlock",
     "TextDelta",
     "ThinkingBlock",
@@ -67,6 +107,7 @@ __all__ = [
     "ToolResult",
     "ToolResultBlock",
     "ToolUseBlock",
+    "TurnDiscarded",
     "TurnEnd",
     "Usage",
     "user_message",

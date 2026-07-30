@@ -11,26 +11,7 @@ from wy_core.log import AuditLog
 from wy_core.message import Message, ToolResultBlock, ToolUseBlock, Usage, user_message
 from wy_core.model import Model, ModelEnd, ModelError, TextDelta, ThinkingDelta
 from wy_core.session import Session
-from wy_core.tool import Tool
-
-
-@dataclass
-class ToolCall:
-    """工具即将执行。"""
-
-    id: str
-    name: str
-    input: dict
-
-
-@dataclass
-class ToolResult:
-    """工具执行完毕。"""
-
-    id: str
-    name: str
-    content: str
-    is_error: bool
+from wy_core.tool import Tool, ToolCall, ToolResult
 
 
 @dataclass

@@ -1,6 +1,12 @@
-"""工具抽象父类:模型可调用工具的 API schema 加本地执行器。"""
+"""工具抽象父类与工具执行事件。
+
+``Tool`` 是模型可调用工具的 API schema 加本地执行器;``ToolCall``/
+``ToolResult`` 是两类 agent(回合式 ``Agent`` 与实时 ``RealtimeAgent``)
+共用的工具执行事件。
+"""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 
 class Tool(ABC):
@@ -22,3 +28,22 @@ class Tool(ABC):
     @abstractmethod
     def execute(self, input: dict) -> str:
         """执行工具,返回给模型看的文本结果。"""
+
+
+@dataclass
+class ToolCall:
+    """工具即将执行。"""
+
+    id: str
+    name: str
+    input: dict
+
+
+@dataclass
+class ToolResult:
+    """工具执行完毕。"""
+
+    id: str
+    name: str
+    content: str
+    is_error: bool

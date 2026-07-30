@@ -1,8 +1,8 @@
 # wy-core SDK 使用文档
 
-零依赖（纯标准库）的极简 agent core runtime：统一消息词汇、`Model`/`Tool` 抽象契约、内存态会话与自动上下文压缩、JSONL 审计日志、完整的 agent 工具循环。**继承 `Model` 适配任意 LLM API、继承 `Tool` 添加工具，即得到一个完整的 harness agent。**
+零依赖（纯标准库）的极简 agent core runtime：统一消息词汇、`Model`/`Tool` 抽象契约、内存态会话与自动上下文压缩、JSONL 审计日志、完整的 agent 工具循环，以及端到端语音的 realtime 契约（`RealtimeModel`/`RealtimeAgent`/音频抽象）。**继承 `Model` 适配任意 LLM API、继承 `Tool` 添加工具，即得到一个完整的 harness agent；继承 `RealtimeModel` 适配厂商实时语音协议，即得到一个完整的实时语音 agent。**
 
-本文面向把本包当作 SDK 使用的开发者（含 AI 编码助手）。包内部实现约定见 [AGENTS.md](AGENTS.md)；两个参考消费方：[wy-coding-agent](../wy-coding-agent)（完整用法：`AnthropicModel` 模型实现、本地工具、持久化、TUI）、[wy-realtime-agent](../wy-realtime-agent)（只复用 `Tool`/`AuditLog`/事件词汇的最小用法）。
+本文面向把本包当作 SDK 使用的开发者（含 AI 编码助手）。包内部实现约定见 [AGENTS.md](AGENTS.md)；两个参考消费方：[wy-coding-agent](../wy-coding-agent)（文本回合式完整用法：`AnthropicModel` 模型实现、本地工具、持久化、TUI）、[wy-realtime-agent](../wy-realtime-agent)（realtime 契约完整用法：`QwenRealtimeModel` 协议翻译 + sounddevice 音频）。
 
 ## 架构一览
 
@@ -12,9 +12,15 @@ Agent.run(user_input)  ← async 事件流（增量/工具/压缩/回合结束�
   ├─ Tool[]   抽象契约：你继承它添加工具（name/description/parameters + 同步 execute）
   ├─ Session  内存态消息历史 + 用量统计 + 自动上下文压缩
   └─ AuditLog JSONL 审计（默认开启，写 CWD/.wy_audit/）
+
+RealtimeAgent.run()    ← async 事件流（转写/工具/打断/会话结束），见「Realtime」章
+  ├─ RealtimeModel      抽象契约：你继承它适配厂商实时协议（wire 事件 ↔ 类型化事件翻译）
+  ├─ Tool[]             与文本侧同一套工具契约
+  ├─ AudioSource/Sink   流式音频 IO 抽象（麦克风/扬声器）
+  └─ AuditLog           同一套 JSONL 审计
 ```
 
-模块依赖方向：`agent → session/log/model/tool → message`，无环。全库只用一套消息词汇（`message` 模块，Anthropic 风格中立块）；非 Anthropic 后端由你的 `Model` 实现自行完成两侧格式翻译。
+模块依赖方向：文本回合侧 `agent → session/log/model/tool → message`、实时侧 `realtime_agent → realtime_model/audio/log/tool`（`realtime_model → tool`），无环。全库只用一套消息词汇（`message` 模块，Anthropic 风格中立块）；非 Anthropic 后端由你的 `Model` 实现自行完成两侧格式翻译。
 
 ## 安装
 
@@ -236,6 +242,85 @@ Session(*, max_context_tokens: int = 150_000, keep_recent: int = 8)
 - Agent 默认开启审计（**构造瞬间即写 `agent_start` 一条**），kind 全集：`agent_start` / `request` / `model_end` / `tool_call` / `tool_result` / `compaction` / `error`。
 - 注意 `request` 记录**每轮请求的完整消息列表**——长会话下文件会明显增长，且可能含敏感内容；不需要时 `Agent(audit=None)` 关闭，或传自定义 `AuditLog(path)` 控制落盘位置。
 
+## Realtime：端到端语音契约
+
+文本回合式之外，wy-core 提供第二套契约用于端到端语音等**推送式全双工**实时协议（服务端维护对话上下文、VAD 主动触发响应，如 Qwen-Audio realtime / OpenAI Realtime）。这类协议不适配 `Model.stream` 的拉取式回合契约，因此单独成体系，**不使用** `Session`（服务端持上下文，审计日志完整留痕）。参考实现见 wy-realtime-agent。
+
+### RealtimeModel 契约
+
+厂商参数（endpoint、鉴权、音色、VAD 参数、历史轮数……）全部构造期注入；九个抽象方法：
+
+```python
+class MyRealtimeModel(RealtimeModel):
+    name = "my-realtime"                                    # 仅用于展示与审计
+
+    async def connect(self) -> None: ...                    # 建连；失败 raise RealtimeError
+    async def update_session(self, *, system=None, tools=()) -> dict: ...
+                                                            # 下发 system+工具；返回实发载荷（供审计）
+    async def send_audio(self, pcm: bytes) -> None: ...     # 推一块用户语音 PCM
+    async def send_user_text(self, text: str) -> None: ...  # 注入 user 文字消息（不触发响应）
+    async def send_tool_result(self, call_id: str, output: str) -> None: ...
+                                                            # 回写工具结果（不触发响应）
+    async def create_response(self) -> None: ...            # 请求模型立即开始一次回复
+    async def cancel_response(self) -> None: ...            # 取消进行中的回复（打断）
+    def events(self) -> AsyncIterator[RealtimeModelEvent]: ...
+                                                            # 厂商 wire 事件 → 类型化事件
+    async def close(self) -> None: ...                      # 幂等，未建连可调
+```
+
+实现方义务：wire 事件自行翻译为下表词汇，**词汇之外不产出**（静默忽略）；`AudioDelta.pcm` 必须已解码、`FunctionCall.arguments` 必须已解析（残缺回退空 dict）；服务端正常关闭时 `events()` 自然结束，握手/传输/异常关闭一律 raise `RealtimeError`（未建连时调用发送类方法同样如此）；`update_session` 由 Agent 在建连后调用恰好一次；`tools` 只读 schema **永不调用 `execute`**。
+
+| 模型事件（`RealtimeModelEvent`） | 字段 | 语义 |
+|---|---|---|
+| `ResponseStarted` | `response_id` | 服务端开始产出一次回复 |
+| `AudioDelta` | `pcm: bytes` | 回复语音增量（已解码 PCM） |
+| `SpeechStarted` | — | VAD 检测到用户开始说话 |
+| `UserTranscript` | `text` | 用户语音转写完成 |
+| `AssistantTranscript` | `text` | 模型回复转写完成 |
+| `TurnDiscarded` | — | 服务端判定语音不构成有效轮次，不会产出回复 |
+| `FunctionCall` | `call_id, name, arguments: dict` | 模型请求执行工具 |
+| `ResponseDone` | `cancelled: bool` | 一次回复结束（被打断取消则 cancelled=True） |
+| `ErrorEvent` | `type, message` | 服务端非致命错误（致命错误随后表现为连接关闭） |
+
+### 音频抽象
+
+`AudioSource`（`start` / `read(timeout) -> bytes | None` / `stop`）与 `AudioSink`（`start` / `play(pcm)` / `clear` / `is_playing` / `stop`）。PCM 一律 int16 单声道字节；**采样率不属于契约**，由音频实现与 RealtimeModel 实现两侧按厂商协议自行约定，core 只搬运字节。`read` 为同步阻塞方法（agent 经 `asyncio.to_thread` 调用），超时返回 `None`；`play` 不得阻塞事件循环；`clear` 用于打断；`is_playing` 供回声抑制。
+
+### RealtimeAgent 编排
+
+```python
+RealtimeAgent(
+    *,
+    model: RealtimeModel,            # 必填
+    tools: Sequence[Tool] = (),      # 与文本侧同一套 Tool；重名抛 ValueError
+    system: str | None = None,       # 经 update_session 下发
+    mic: AudioSource,                # 必填（无设备环境注入假件）
+    speaker: AudioSink,              # 必填
+    echo_suppression: bool = True,   # True=AI 说话时闭麦；False=耳机模式，支持打断
+    audit: AuditLog | None = ...,    # 省略 = 写 CWD/.wy_audit/；显式 None 关闭
+    closer: Callable[[], None] | None = None,  # close() 时释放的注入资源（如 MCP 连接）
+)
+```
+
+`run()` 建连 → 一次 `update_session` → 后台任务持续推麦克风音频 + 消费模型事件流，产出 `RealtimeEvent`：
+
+| 事件 | 何时产出 |
+|---|---|
+| `UserTranscript` / `AssistantTranscript` | 转写完成（模型事件原样透传） |
+| `ToolCall` / `ToolResult` | 工具执行（与文本侧同一对 dataclass） |
+| `Interrupted(response_id)` | 用户语音打断了进行中的回复 |
+| `SessionEnded(reason)` | 连接结束（服务端正常关闭或传输失败），`run()` 以此收尾 |
+
+内置编排语义（实现方无须关心）：
+
+- **打断**：`SpeechStarted` 即清空扬声器；回复进行中则再 `cancel_response`，并抑制残余 `AudioDelta` 直到下一个 `ResponseStarted`。
+- **回声抑制**：`echo_suppression=True`（免耳机）回复/播放期间闭麦 + 结束后 0.5s 冷却，不支持语音打断；`False`（耳机模式）用能量门限滤回声，高能量语音照发以支持打断。
+- **收集式 function calling**：一次回复的多个 `FunctionCall` 先收集，非 cancelled 的 `ResponseDone` 后统一顺序执行、逐个 `send_tool_result`，最后只触发一次二轮推理；被打断（cancelled）的回复丢弃未执行调用。工具执行语义与 `Agent` 一致（`to_thread`、异常/未知工具转 `Error: ...` 文本不中断会话）。
+- **后台文字指令注入**：`await agent.send_user_text(text)`（须在 `run()` 所在事件循环调用，未建连抛 `RealtimeError`）——空闲立即注入并触发响应；在听（`SpeechStarted` 起）/在答/响应待建时排队，回合真正结束（无待执行工具的 `ResponseDone` 或 `TurnDiscarded`）后按序补发、只触发一次响应；`ErrorEvent` 兜底清除"响应待建"防止队列卡死。
+- 传输失败（`RealtimeError`）→ `SessionEnded` 优雅收尾；其余异常审计后上抛；出口统一停发送任务、停音频、关连接。
+
+审计 kind 全集：`agent_start` / `session_update` / `user_transcript` / `assistant_transcript` / `user_text` / `interrupted` / `tool_call` / `tool_result` / `error`。其中 `session_update` 记录 `update_session` 返回的实发载荷——音色、VAD 等厂商字段靠它留痕。
+
 ## 公开 API 一览
 
 均从包根导入：`from wy_core import ...`
@@ -243,7 +328,7 @@ Session(*, max_context_tokens: int = 150_000, keep_recent: int = 8)
 | 导出 | 说明 |
 |---|---|
 | `Agent` / `AgentError` / `AgentEvent` | agent 循环、其错误类型与事件联合类型 |
-| `TurnEnd` / `ToolCall` / `ToolResult` / `Compaction` | agent 事件 dataclass |
+| `TurnEnd` / `ToolCall` / `ToolResult` / `Compaction` | agent 事件 dataclass（`ToolCall`/`ToolResult` 与实时侧共用） |
 | `Model` / `ModelError` / `ModelEvent` | 模型抽象契约、错误类型与流事件联合类型 |
 | `TextDelta` / `ThinkingDelta` / `ModelEnd` | 模型流事件 dataclass |
 | `Tool` | 工具抽象契约 |
@@ -251,6 +336,11 @@ Session(*, max_context_tokens: int = 150_000, keep_recent: int = 8)
 | `AuditLog` | JSONL 审计日志 |
 | `Message` / `Block` / `TextBlock` / `ThinkingBlock` / `ToolUseBlock` / `ToolResultBlock` | 统一消息词汇 |
 | `Usage` / `user_message` | 用量统计与 user 消息快捷构造 |
+| `RealtimeAgent` / `RealtimeEvent` | 实时编排循环与其事件联合类型 |
+| `UserTranscript` / `AssistantTranscript` / `Interrupted` / `SessionEnded` | 实时 agent 事件 dataclass |
+| `RealtimeModel` / `RealtimeError` / `RealtimeModelEvent` | 实时模型抽象契约、错误类型与事件联合类型 |
+| `ResponseStarted` / `AudioDelta` / `SpeechStarted` / `TurnDiscarded` / `FunctionCall` / `ResponseDone` / `ErrorEvent` | 实时模型事件 dataclass |
+| `AudioSource` / `AudioSink` | 流式音频 IO 抽象 |
 
 ## 集成检查单（给 AI 的注意事项）
 
@@ -263,3 +353,5 @@ Session(*, max_context_tokens: int = 150_000, keep_recent: int = 8)
 7. 压缩只发生在**两次模型请求之间**，且依赖 `record_usage` 刷新的 `context_tokens`——Agent 内部已自动处理；绕开 Agent 手工驱动 Session 时记得自己调 `record_usage`。
 8. `max_iterations`（默认 50）是失控循环保险丝，超限抛 `AgentError` 并回滚本回合。
 9. 本包**零运行时依赖**且承诺保持——不要在扩展它时引入第三方库；应用层能力（厂商 SDK、持久化、UI）放在你自己的包里。
+10. **实时侧：实现 `RealtimeModel` 的翻译层是唯一重活**——词汇之外的 wire 事件不要产出；`update_session` 要返回实际发送的载荷（音色、VAD 等厂商字段的审计留痕靠它）；`RealtimeError` 是 core 与实现之间的失败契约（core 捕获它转 `SessionEnded` 优雅收尾）。
+11. `RealtimeAgent` 的 `mic`/`speaker` 必填——无设备环境注入假件即可（`read` 返回 `None` 表示暂无数据；参考 wy-realtime-agent 测试的 FakeMic/FakeSpeaker）。
