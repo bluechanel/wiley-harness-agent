@@ -2,6 +2,8 @@
 
 包定位、依赖方向（`wy_realtime_agent → wy_core`，app 包之间互不依赖）、import 规则与路径解析约定见仓库根 `AGENTS.md`；`Tool`/`AuditLog` 等核心契约语义见 `packages/wy-core/AGENTS.md`。本文件是本应用包内各模块的详细约定。
 
+本包 `README.md` 是面向外部集成方（含 AI）的 SDK 使用文档，经 pyproject 的 `readme` 字段随 wheel 元数据发布：公开导出、配置字段、事件语义或集成约定变更时必须同步更新它。
+
 ## 与 wy-core 的复用边界
 
 - 实时协议（协议参考 `realtime_llm_ws.md`，Qwen-Audio realtime，OpenAI Realtime 风格事件）是**服务端维护对话上下文、VAD 主动触发响应的推送式全双工流**，与 `wy_core.Model.stream`（整历史进、单流出的拉取式契约）和 `Agent.run`（文本输入回合循环）不匹配，因此本包**不使用** `wy_core.Model`/`Agent`/`Session`，由 `agent.py` 的 `RealtimeAgent` 自成事件循环；也不做本地会话镜像/SessionStore（服务端持上下文，审计日志已完整留痕）。

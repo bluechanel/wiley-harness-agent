@@ -2,6 +2,8 @@
 
 包定位与 workspace 结构见仓库根 `AGENTS.md`;本文件是 `wy_core` 包内的模块约定。
 
+本包 `README.md` 是面向外部使用方（含 AI）的 SDK 使用文档，经 pyproject 的 `readme` 字段随 wheel 元数据发布：公开导出、契约义务（Model/Tool docstring）、事件语义或默认行为变更时必须同步更新它。
+
 ## 总原则
 
 - 零运行时依赖(纯标准库),禁止 import 本仓其他包;首要目标是代码简洁易懂,每个模块保持小体量(目标 <150 行)。
