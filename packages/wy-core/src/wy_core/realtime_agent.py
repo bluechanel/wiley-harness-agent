@@ -21,6 +21,7 @@ from wy_core.audio import AudioSink, AudioSource
 from wy_core.log import AuditLog
 from wy_core.realtime_model import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     AudioDelta,
     ErrorEvent,
     FunctionCall,
@@ -29,9 +30,13 @@ from wy_core.realtime_model import (
     RealtimeModelEvent,
     ResponseDone,
     ResponseStarted,
+    SessionReady,
     SpeechStarted,
+    SpeechStopped,
+    TurnCommitted,
     TurnDiscarded,
     UserTranscript,
+    UserTranscriptDelta,
 )
 from wy_core.tool import Tool, ToolCall, ToolResult
 
@@ -44,6 +49,13 @@ class Interrupted:
 
 
 @dataclass
+class ToolResultsSubmitted:
+    """收集的工具结果已全部回写并触发二轮推理,等待模型新一次回复。"""
+
+    count: int
+
+
+@dataclass
 class SessionEnded:
     """连接结束(服务端关闭或传输错误),run() 以此收尾。"""
 
@@ -51,7 +63,24 @@ class SessionEnded:
 
 
 RealtimeEvent = (
-    UserTranscript | AssistantTranscript | ToolCall | ToolResult | Interrupted | SessionEnded
+    SessionReady
+    | SpeechStarted
+    | UserTranscriptDelta
+    | SpeechStopped
+    | UserTranscript
+    | TurnCommitted
+    | TurnDiscarded
+    | ResponseStarted
+    | AudioDelta
+    | AssistantTranscriptDelta
+    | AssistantTranscript
+    | ResponseDone
+    | ToolCall
+    | ToolResult
+    | ToolResultsSubmitted
+    | Interrupted
+    | ErrorEvent
+    | SessionEnded
 )
 
 _ECHO_COOLDOWN_SECONDS = 0.5  # 播放结束后的闭麦冷却,防扬声器尾音触发 VAD
@@ -220,7 +249,12 @@ class RealtimeAgent:
             await self.model.send_audio(chunk)
 
     async def _handle_event(self, event: RealtimeModelEvent) -> AsyncIterator[RealtimeEvent]:
-        """分发一个模型事件,产出要透给消费方的 RealtimeEvent。"""
+        """分发一个模型事件:维护编排状态,并把生命周期事件透传给消费方。
+
+        除 ``FunctionCall``(收集待执行)与被抑制的残余增量外,模型事件
+        一律原样透出,供下游做细粒度状态管理;编排正确性不依赖可选的
+        生命周期信号(SessionReady/SpeechStopped/TurnCommitted)。
+        """
         if isinstance(event, ResponseStarted):
             self._is_responding = True
             self._listening = False
@@ -228,9 +262,16 @@ class RealtimeAgent:
             self._audio_suppressed = False
             self._current_response_id = event.response_id
             self._pending_calls.clear()  # 防御:上一响应未闭合时不让旧调用泄入
+            yield event
         elif isinstance(event, AudioDelta):
             if not self._audio_suppressed:
                 self.speaker.play(event.pcm)
+                yield event
+        elif isinstance(event, AssistantTranscriptDelta):
+            # 字幕增量与音频增量同命运:被打断响应的残余一并抑制;
+            # 增量仅供渲染,不审计(完整转写在 AssistantTranscript 留痕)。
+            if not self._audio_suppressed:
+                yield event
         elif isinstance(event, SpeechStarted):
             # 进入"在听":直到本轮 ResponseStarted(开始答)或 TurnDiscarded
             # (判非轮次)为止,期间不注入后台指令。
@@ -238,6 +279,7 @@ class RealtimeAgent:
             # 打断:立即停播,并取消进行中的回复;残余 AudioDelta 抑制到
             # 下一个 ResponseStarted。
             self.speaker.clear()
+            yield event
             if self._is_responding:
                 await self.model.cancel_response()
                 self._audio_suppressed = True
@@ -246,6 +288,9 @@ class RealtimeAgent:
                 self._audit("interrupted", {"response_id": self._current_response_id})
                 yield Interrupted(response_id=self._current_response_id)
                 self._current_response_id = None
+        elif isinstance(event, UserTranscriptDelta):
+            # 增量仅供渲染,不审计(完整转写在 UserTranscript 留痕)。
+            yield event
         elif isinstance(event, UserTranscript):
             self._audit("user_transcript", {"text": event.text})
             yield event
@@ -253,6 +298,7 @@ class RealtimeAgent:
             # 判非轮次:这段语音不会触发回答,"在听"结束,回到空闲后补发
             # 排队的后台指令。
             self._listening = False
+            yield event
             await self._flush_pending_texts()
         elif isinstance(event, AssistantTranscript):
             self._audit("assistant_transcript", {"text": event.text})
@@ -265,6 +311,7 @@ class RealtimeAgent:
             self._is_responding = False
             self._current_response_id = None
             calls, self._pending_calls = self._pending_calls, []
+            yield event
             if calls and not event.cancelled:
                 async for out in self._run_calls(calls):
                     yield out
@@ -273,11 +320,15 @@ class RealtimeAgent:
                 # 若打断后仍"在听",flush 会按兵不动,留到下一次空闲。
                 await self._flush_pending_texts()
         elif isinstance(event, ErrorEvent):
-            # 非致命服务端错误只记审计不断流(致命错误随后表现为连接关闭)。
+            # 非致命服务端错误记审计并透传(致命错误随后表现为连接关闭)。
             self._audit("error", {"type": event.type, "error": event.message})
             # 失败保底:若被拒的是我们的响应触发,ResponseStarted 永远不会
             # 来,清掉待建标记以免排队指令卡死。
             self._response_pending = False
+            yield event
+        elif isinstance(event, (SessionReady, SpeechStopped, TurnCommitted)):
+            # 不影响编排状态的生命周期信号,原样透传。
+            yield event
 
     async def _run_calls(self, calls: list[FunctionCall]) -> AsyncIterator[RealtimeEvent]:
         """顺序执行收集到的 FunctionCall,逐个回写结果,最后触发二轮推理。"""
@@ -294,6 +345,7 @@ class RealtimeAgent:
             yield ToolResult(id=call.call_id, name=call.name, content=content, is_error=is_error)
             await self.model.send_tool_result(call.call_id, content)
         await self._request_response()
+        yield ToolResultsSubmitted(count=len(calls))
 
     async def _execute(self, name: str, arguments: dict) -> tuple[str, bool]:
         """执行单个工具调用;语义对齐 ``Agent``:任何失败转错误文本。"""

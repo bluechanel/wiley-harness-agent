@@ -9,6 +9,7 @@ import pytest
 
 from wy_core import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     AudioDelta,
     AuditLog,
     ErrorEvent,
@@ -19,11 +20,16 @@ from wy_core import (
     ResponseDone,
     ResponseStarted,
     SessionEnded,
+    SessionReady,
     SpeechStarted,
+    SpeechStopped,
     ToolCall,
     ToolResult,
+    ToolResultsSubmitted,
+    TurnCommitted,
     TurnDiscarded,
     UserTranscript,
+    UserTranscriptDelta,
 )
 
 from core_realtime_helpers import (
@@ -55,6 +61,97 @@ def test_run_updates_session_then_surfaces_transcripts() -> None:
     assert kind == "session.update"
     assert payload == {"instructions": "你是语音助手", "tools": ["echo"]}
     assert model.closed
+
+
+def test_transcript_deltas_pass_through_in_order_without_audit(tmp_path: Path) -> None:
+    agent, _model = make_realtime_agent(
+        [
+            UserTranscriptDelta(text="你", stash="好"),
+            UserTranscriptDelta(text="好"),
+            UserTranscript(text="你好"),
+            ResponseStarted(response_id="resp_1"),
+            AssistantTranscriptDelta(text="在"),
+            AssistantTranscriptDelta(text="的"),
+            AssistantTranscript(text="在的"),
+            ResponseDone(),
+        ],
+        audit=AuditLog(tmp_path / "audit.jsonl"),
+    )
+
+    events = run_realtime(agent)
+
+    assert events == [
+        UserTranscriptDelta(text="你", stash="好"),
+        UserTranscriptDelta(text="好"),
+        UserTranscript(text="你好"),
+        ResponseStarted(response_id="resp_1"),
+        AssistantTranscriptDelta(text="在"),
+        AssistantTranscriptDelta(text="的"),
+        AssistantTranscript(text="在的"),
+        ResponseDone(),
+        SessionEnded(reason="服务端关闭了连接"),
+    ]
+    # 增量与生命周期信号仅供渲染/状态管理:审计只留完成级转写,不逐 delta 留痕。
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert kinds == ["agent_start", "session_update", "user_transcript", "assistant_transcript"]
+
+
+def test_lifecycle_events_surface_in_wire_order_for_state_management() -> None:
+    agent, _model = make_realtime_agent(
+        [
+            SessionReady(),
+            SpeechStarted(),
+            UserTranscriptDelta(text="你好"),
+            SpeechStopped(),
+            TurnCommitted(),
+            UserTranscript(text="你好"),
+            ResponseStarted(response_id="resp_1"),
+            AudioDelta(pcm=b"\x01\x02"),
+            AssistantTranscriptDelta(text="你好呀"),
+            AssistantTranscript(text="你好呀"),
+            ResponseDone(),
+        ]
+    )
+
+    events = run_realtime(agent)
+
+    assert events == [
+        SessionReady(),
+        SpeechStarted(),
+        UserTranscriptDelta(text="你好"),
+        SpeechStopped(),
+        TurnCommitted(),
+        UserTranscript(text="你好"),
+        ResponseStarted(response_id="resp_1"),
+        AudioDelta(pcm=b"\x01\x02"),
+        AssistantTranscriptDelta(text="你好呀"),
+        AssistantTranscript(text="你好呀"),
+        ResponseDone(),
+        SessionEnded(reason="服务端关闭了连接"),
+    ]
+
+
+def test_interruption_suppresses_residual_transcript_deltas() -> None:
+    agent, _model = make_realtime_agent(
+        [
+            ResponseStarted(response_id="resp_1"),
+            AssistantTranscriptDelta(text="早上"),
+            SpeechStarted(),  # 打断
+            AssistantTranscriptDelta(text="好呀"),  # 被打断响应的残余字幕:抑制
+            ResponseDone(cancelled=True),
+            ResponseStarted(response_id="resp_2"),
+            AssistantTranscriptDelta(text="新回复"),
+        ]
+    )
+
+    events = run_realtime(agent)
+
+    assert Interrupted(response_id="resp_1") in events
+    deltas = [event.text for event in events if isinstance(event, AssistantTranscriptDelta)]
+    assert deltas == ["早上", "新回复"]
 
 
 def test_run_stops_audio_and_marks_lifecycle() -> None:
@@ -95,11 +192,15 @@ def test_function_calls_collected_and_executed_after_response_done() -> None:
 
     events = run_realtime(agent)
 
-    assert events[:-1] == [
+    assert events == [
+        ResponseStarted(response_id="resp_1"),
+        ResponseDone(),
         ToolCall(id="c1", name="echo", input={"text": "hi"}),
         ToolResult(id="c1", name="echo", content="hi", is_error=False),
         ToolCall(id="c2", name="nope", input={}),
         ToolResult(id="c2", name="nope", content="Error: unknown tool nope", is_error=True),
+        ToolResultsSubmitted(count=2),
+        SessionEnded(reason="服务端关闭了连接"),
     ]
     assert model.sent_of_type("tool_result") == [
         ("c1", "hi"),
@@ -239,6 +340,7 @@ def test_server_error_event_is_audited_not_fatal(tmp_path: Path, monkeypatch) ->
 
     events = run_realtime(agent)
 
+    assert ErrorEvent(type="invalid_request_error", message="bad") in events  # 透传给下游
     assert AssistantTranscript(text="还在") in events
     audit_files = list((tmp_path / ".wy_audit").glob("*.jsonl"))
     assert len(audit_files) == 1
@@ -412,8 +514,9 @@ def test_turn_discarded_ends_listening_and_flushes() -> None:
         if isinstance(event, UserTranscript):
             await agent.send_user_text("别卡住")
 
-    run_realtime(agent, on_event=inject)
+    events = run_realtime(agent, on_event=inject)
 
+    assert TurnDiscarded() in events  # 判非轮次信号同样透传给下游
     assert model.sent_of_type("user_text") == ["别卡住"]
     assert len(model.indexes_of("response.create")) == 1
 

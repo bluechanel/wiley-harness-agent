@@ -20,6 +20,11 @@ class RealtimeError(RuntimeError):
 
 
 @dataclass
+class SessionReady:
+    """服务端已确认会话配置生效,可以开始对话。"""
+
+
+@dataclass
 class ResponseStarted:
     """服务端开始产出一次回复。"""
 
@@ -39,8 +44,46 @@ class SpeechStarted:
 
 
 @dataclass
+class SpeechStopped:
+    """服务端 VAD 检测到用户语音结束。
+
+    smart_turn 模式下 ``reason == "turn_invalid"`` 表示该段语音被判为
+    无效轮次、不会触发推理;有效轮次(或 server_vad 模式)reason 为 None。
+    """
+
+    reason: str | None = None
+
+
+@dataclass
+class TurnCommitted:
+    """一段用户语音已提交为对话轮次,模型随即开始推理。"""
+
+
+@dataclass
+class UserTranscriptDelta:
+    """一段用户语音转写的流式增量,仅供实时渲染。
+
+    ``text`` 是新确定的文本增量(逐段累加),``stash`` 是尚未确定、可能被
+    后续修订的暂存尾部(每次整体替换);权威全文以 ``UserTranscript`` 为准。
+    """
+
+    text: str
+    stash: str = ""
+
+
+@dataclass
 class UserTranscript:
     """一段用户语音的转写已完成。"""
+
+    text: str
+
+
+@dataclass
+class AssistantTranscriptDelta:
+    """一次模型语音回复转写(字幕)的流式增量,仅供实时渲染。
+
+    权威全文以 ``AssistantTranscript`` 为准。
+    """
 
     text: str
 
@@ -82,10 +125,15 @@ class ErrorEvent:
 
 
 RealtimeModelEvent = (
-    ResponseStarted
+    SessionReady
+    | ResponseStarted
     | AudioDelta
     | SpeechStarted
+    | SpeechStopped
+    | TurnCommitted
+    | UserTranscriptDelta
     | UserTranscript
+    | AssistantTranscriptDelta
     | AssistantTranscript
     | TurnDiscarded
     | FunctionCall
@@ -104,6 +152,11 @@ class RealtimeModel(ABC):
       词汇逐个产出;词汇之外的 wire 事件不产出(静默忽略)。
       ``AudioDelta.pcm`` 必须是已解码的 PCM 字节;``FunctionCall.
       arguments`` 必须是已解析的 dict(残缺入参回退空 dict)。
+    - 转写增量(``UserTranscriptDelta``/``AssistantTranscriptDelta``)仅供
+      实时渲染,厂商协议不提供流式转写时可不产出;权威全文始终以
+      ``UserTranscript``/``AssistantTranscript`` 为准。生命周期信号
+      (``SessionReady``/``SpeechStopped``/``TurnCommitted``)同理按厂商
+      能力尽力产出,供下游状态管理,编排正确性不依赖它们。
     - 服务端正常关闭时 ``events()`` 自然结束;握手 / 传输 / 异常关闭
       一律 raise ``RealtimeError``,未建连时调用发送类方法同样如此。
     - ``update_session`` 由 Agent 在 ``connect`` 之后、消费事件之前

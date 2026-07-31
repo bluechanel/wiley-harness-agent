@@ -268,16 +268,21 @@ class MyRealtimeModel(RealtimeModel):
     async def close(self) -> None: ...                      # 幂等，未建连可调
 ```
 
-实现方义务：wire 事件自行翻译为下表词汇，**词汇之外不产出**（静默忽略）；`AudioDelta.pcm` 必须已解码、`FunctionCall.arguments` 必须已解析（残缺回退空 dict）；服务端正常关闭时 `events()` 自然结束，握手/传输/异常关闭一律 raise `RealtimeError`（未建连时调用发送类方法同样如此）；`update_session` 由 Agent 在建连后调用恰好一次；`tools` 只读 schema **永不调用 `execute`**。
+实现方义务：wire 事件自行翻译为下表词汇，**词汇之外不产出**（静默忽略）；`AudioDelta.pcm` 必须已解码、`FunctionCall.arguments` 必须已解析（残缺回退空 dict）；转写增量（`UserTranscriptDelta`/`AssistantTranscriptDelta`）仅供实时渲染，厂商协议不提供流式转写时可不产出，权威全文始终以 `UserTranscript`/`AssistantTranscript` 为准；生命周期信号（`SessionReady`/`SpeechStopped`/`TurnCommitted`）同理按厂商能力尽力产出，供下游状态管理，编排正确性不依赖它们；服务端正常关闭时 `events()` 自然结束，握手/传输/异常关闭一律 raise `RealtimeError`（未建连时调用发送类方法同样如此）；`update_session` 由 Agent 在建连后调用恰好一次；`tools` 只读 schema **永不调用 `execute`**。
 
 | 模型事件（`RealtimeModelEvent`） | 字段 | 语义 |
 |---|---|---|
+| `SessionReady` | — | 服务端确认会话配置生效，可以开始对话 |
+| `SpeechStarted` | — | VAD 检测到用户开始说话 |
+| `UserTranscriptDelta` | `text, stash` | 用户语音转写增量：`text` 为新确定文本（逐段累加），`stash` 为未定暂存尾部（整体替换） |
+| `SpeechStopped` | `reason` | VAD 检测到用户语音结束；smart_turn 判无效轮时 `reason="turn_invalid"`，否则为 None |
+| `UserTranscript` | `text` | 用户语音转写完成 |
+| `TurnCommitted` | — | 用户语音已提交为对话轮次，模型随即开始推理 |
+| `TurnDiscarded` | — | 服务端判定语音不构成有效轮次，不会产出回复 |
 | `ResponseStarted` | `response_id` | 服务端开始产出一次回复 |
 | `AudioDelta` | `pcm: bytes` | 回复语音增量（已解码 PCM） |
-| `SpeechStarted` | — | VAD 检测到用户开始说话 |
-| `UserTranscript` | `text` | 用户语音转写完成 |
+| `AssistantTranscriptDelta` | `text` | 模型回复转写（字幕）增量 |
 | `AssistantTranscript` | `text` | 模型回复转写完成 |
-| `TurnDiscarded` | — | 服务端判定语音不构成有效轮次，不会产出回复 |
 | `FunctionCall` | `call_id, name, arguments: dict` | 模型请求执行工具 |
 | `ResponseDone` | `cancelled: bool` | 一次回复结束（被打断取消则 cancelled=True） |
 | `ErrorEvent` | `type, message` | 服务端非致命错误（致命错误随后表现为连接关闭） |
@@ -302,24 +307,37 @@ RealtimeAgent(
 )
 ```
 
-`run()` 建连 → 一次 `update_session` → 后台任务持续推麦克风音频 + 消费模型事件流，产出 `RealtimeEvent`：
+`run()` 建连 → 一次 `update_session` → 后台任务持续推麦克风音频 + 消费模型事件流，产出 `RealtimeEvent`。除 `FunctionCall`（收集待执行）与被抑制的残余增量外，模型事件一律原样透出，加上编排自产的四个事件（`ToolCall`/`ToolResult`/`ToolResultsSubmitted`/`Interrupted`/`SessionEnded`），覆盖完整生命周期，供下游做细粒度状态管理（按典型时序排列）：
 
 | 事件 | 何时产出 |
 |---|---|
-| `UserTranscript` / `AssistantTranscript` | 转写完成（模型事件原样透传） |
-| `ToolCall` / `ToolResult` | 工具执行（与文本侧同一对 dataclass） |
+| `SessionReady` | 服务端确认会话配置生效（模型事件透传，厂商可选） |
+| `SpeechStarted` | 用户开始说话（VAD） |
+| `UserTranscriptDelta` | 用户说话中：转写流式增量（仅供渲染、不审计） |
+| `SpeechStopped(reason)` | 用户说话结束（VAD）；smart_turn 判无效轮时 `reason="turn_invalid"` |
+| `UserTranscript` | 用户语音转写完成 |
+| `TurnCommitted` | 轮次已提交，模型开始推理（"思考中"起点） |
+| `TurnDiscarded` | 判非轮次：不会有回复，状态回到空闲 |
+| `ResponseStarted(response_id)` | 模型开始响应 |
+| `AudioDelta(pcm)` | 响应中·语音增量（已送扬声器后透出；被打断回复的残余被抑制） |
+| `AssistantTranscriptDelta` | 响应中·文本（字幕）增量（仅供渲染、不审计；残余同样被抑制） |
+| `AssistantTranscript` | 模型回复转写完成 |
+| `ResponseDone(cancelled)` | 一次响应结束（被打断取消则 `cancelled=True`） |
+| `ToolCall` / `ToolResult` | 工具执行开始/结束（与文本侧同一对 dataclass；两者之间即"执行中"） |
+| `ToolResultsSubmitted(count)` | 全部工具结果已回写并触发二轮推理（"提交给模型"） |
 | `Interrupted(response_id)` | 用户语音打断了进行中的回复 |
+| `ErrorEvent(type, message)` | 服务端非致命错误（含 ASR 转写失败；已写 error 审计后透传） |
 | `SessionEnded(reason)` | 连接结束（服务端正常关闭或传输失败），`run()` 以此收尾 |
 
 内置编排语义（实现方无须关心）：
 
-- **打断**：`SpeechStarted` 即清空扬声器；回复进行中则再 `cancel_response`，并抑制残余 `AudioDelta` 直到下一个 `ResponseStarted`。
+- **打断**：`SpeechStarted` 即清空扬声器；回复进行中则再 `cancel_response`，并抑制残余 `AudioDelta` 与 `AssistantTranscriptDelta` 直到下一个 `ResponseStarted`。
 - **回声抑制**：`echo_suppression=True`（免耳机）回复/播放期间闭麦 + 结束后 0.5s 冷却，不支持语音打断；`False`（耳机模式）用能量门限滤回声，高能量语音照发以支持打断。
 - **收集式 function calling**：一次回复的多个 `FunctionCall` 先收集，非 cancelled 的 `ResponseDone` 后统一顺序执行、逐个 `send_tool_result`，最后只触发一次二轮推理；被打断（cancelled）的回复丢弃未执行调用。工具执行语义与 `Agent` 一致（`to_thread`、异常/未知工具转 `Error: ...` 文本不中断会话）。
 - **后台文字指令注入**：`await agent.send_user_text(text)`（须在 `run()` 所在事件循环调用，未建连抛 `RealtimeError`）——空闲立即注入并触发响应；在听（`SpeechStarted` 起）/在答/响应待建时排队，回合真正结束（无待执行工具的 `ResponseDone` 或 `TurnDiscarded`）后按序补发、只触发一次响应；`ErrorEvent` 兜底清除"响应待建"防止队列卡死。
 - 传输失败（`RealtimeError`）→ `SessionEnded` 优雅收尾；其余异常审计后上抛；出口统一停发送任务、停音频、关连接。
 
-审计 kind 全集：`agent_start` / `session_update` / `user_transcript` / `assistant_transcript` / `user_text` / `interrupted` / `tool_call` / `tool_result` / `error`。其中 `session_update` 记录 `update_session` 返回的实发载荷——音色、VAD 等厂商字段靠它留痕。
+审计 kind 全集：`agent_start` / `session_update` / `user_transcript` / `assistant_transcript` / `user_text` / `interrupted` / `tool_call` / `tool_result` / `error`。其中 `session_update` 记录 `update_session` 返回的实发载荷——音色、VAD 等厂商字段靠它留痕。转写增量不留痕（仅供渲染，完整转写在 `user_transcript`/`assistant_transcript`）。
 
 ## 公开 API 一览
 
@@ -337,9 +355,9 @@ RealtimeAgent(
 | `Message` / `Block` / `TextBlock` / `ThinkingBlock` / `ToolUseBlock` / `ToolResultBlock` | 统一消息词汇 |
 | `Usage` / `user_message` | 用量统计与 user 消息快捷构造 |
 | `RealtimeAgent` / `RealtimeEvent` | 实时编排循环与其事件联合类型 |
-| `UserTranscript` / `AssistantTranscript` / `Interrupted` / `SessionEnded` | 实时 agent 事件 dataclass |
+| `ToolResultsSubmitted` / `Interrupted` / `SessionEnded` | 实时编排自产事件 dataclass |
 | `RealtimeModel` / `RealtimeError` / `RealtimeModelEvent` | 实时模型抽象契约、错误类型与事件联合类型 |
-| `ResponseStarted` / `AudioDelta` / `SpeechStarted` / `TurnDiscarded` / `FunctionCall` / `ResponseDone` / `ErrorEvent` | 实时模型事件 dataclass |
+| `SessionReady` / `ResponseStarted` / `AudioDelta` / `SpeechStarted` / `SpeechStopped` / `TurnCommitted` / `TurnDiscarded` / `UserTranscriptDelta` / `UserTranscript` / `AssistantTranscriptDelta` / `AssistantTranscript` / `FunctionCall` / `ResponseDone` / `ErrorEvent` | 实时模型事件 dataclass（除 `FunctionCall` 外均随 `RealtimeEvent` 透传） |
 | `AudioSource` / `AudioSink` | 流式音频 IO 抽象 |
 
 ## 集成检查单（给 AI 的注意事项）

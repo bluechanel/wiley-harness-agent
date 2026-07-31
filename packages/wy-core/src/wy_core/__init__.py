@@ -51,9 +51,11 @@ from wy_core.realtime_agent import (
     RealtimeAgent,
     RealtimeEvent,
     SessionEnded,
+    ToolResultsSubmitted,
 )
 from wy_core.realtime_model import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     AudioDelta,
     ErrorEvent,
     FunctionCall,
@@ -62,9 +64,13 @@ from wy_core.realtime_model import (
     RealtimeModelEvent,
     ResponseDone,
     ResponseStarted,
+    SessionReady,
     SpeechStarted,
+    SpeechStopped,
+    TurnCommitted,
     TurnDiscarded,
     UserTranscript,
+    UserTranscriptDelta,
 )
 from wy_core.session import Session
 from wy_core.tool import Tool, ToolCall, ToolResult
@@ -74,6 +80,7 @@ __all__ = [
     "AgentError",
     "AgentEvent",
     "AssistantTranscript",
+    "AssistantTranscriptDelta",
     "AudioDelta",
     "AudioSink",
     "AudioSource",
@@ -97,7 +104,9 @@ __all__ = [
     "ResponseStarted",
     "Session",
     "SessionEnded",
+    "SessionReady",
     "SpeechStarted",
+    "SpeechStopped",
     "TextBlock",
     "TextDelta",
     "ThinkingBlock",
@@ -106,9 +115,13 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "ToolResultBlock",
+    "ToolResultsSubmitted",
     "ToolUseBlock",
+    "TurnCommitted",
     "TurnDiscarded",
     "TurnEnd",
     "Usage",
+    "UserTranscript",
+    "UserTranscriptDelta",
     "user_message",
 ]
