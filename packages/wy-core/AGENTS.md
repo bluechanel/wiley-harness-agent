@@ -7,6 +7,7 @@
 ## 总原则
 
 - 零运行时依赖(纯标准库),禁止 import 本仓其他包;首要目标是代码简洁易懂,每个模块保持小体量(目标 <150 行;`realtime_agent.py` 是知情例外,编排状态机不拆)。
+- 兼容 Python 3.10(`requires-python >=3.10`):禁用 3.11+ 才有的标准库特性,如 `datetime.UTC`(用 `datetime.timezone.utc`)、`tomllib`、`typing.Self`、`enum.StrEnum`、`asyncio.TaskGroup`、`except*`。
 - 包内模块以 `from wy_core.<mod> import ...` 子模块路径互引;对外 API 全部经 `wy_core/__init__.py` 重导出,增删导出或改签名即是修改对外契约。
 - 依赖方向:文本回合侧 `agent → session/log/model/tool → message`,实时侧 `realtime_agent → realtime_model/audio/log/tool`(`realtime_model → tool`),无环;`session` 允许依赖 `model`(压缩需要调模型)。
 - 中文 docstring;契约义务写在 ABC 的 docstring 里(docstring 即约定本体)。

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -28,12 +28,12 @@ class AuditLog:
     @classmethod
     def default(cls) -> AuditLog:
         """默认落在 CWD 的 .wy_audit/ 下,文件名含 UTC 时间与随机后缀。"""
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         name = f"{stamp}-{uuid.uuid4().hex[:8]}.jsonl"
         return cls(Path.cwd() / ".wy_audit" / name)
 
     def write(self, kind: str, data: Mapping) -> None:
-        record = {"ts": datetime.now(UTC).isoformat(), "kind": kind, **data}
+        record = {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind, **data}
         self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._file.flush()
 
