@@ -1,4 +1,4 @@
-"""Application entry point: bootstrap the realtime agent and run the console loop."""
+"""Application entry point: bootstrap the realtime agent, launch the TUI or console loop."""
 
 import argparse
 import asyncio
@@ -17,9 +17,11 @@ from wy_core import (
 
 from wy_realtime_agent.config import ConfigError
 from wy_realtime_agent.factory import bootstrap
+from wy_realtime_agent.tui import RealtimeApp
 
 
 async def _run(agent: RealtimeAgent) -> None:
+    """纯控制台逐行输出:只打印完成级事件,转写增量静默忽略。"""
     async for event in agent.run():
         match event:
             case UserTranscript(text=text):
@@ -37,9 +39,14 @@ async def _run(agent: RealtimeAgent) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Assemble via the factory and run the console conversation loop."""
+    """Assemble via the factory, then run the TUI (default) or the plain console loop."""
     parser = argparse.ArgumentParser(description="Wy Realtime Voice Agent")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="纯控制台逐行输出(不启动 TUI,适合调试与重定向)",
+    )
+    args = parser.parse_args(argv)
 
     try:
         agent = bootstrap()
@@ -47,9 +54,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"启动失败：{exc}")
         return
 
-    print("连接实时语音模型…对着麦克风说话即可对话,按 Ctrl+C 退出。")
     try:
-        asyncio.run(_run(agent))
+        if args.plain:
+            print("连接实时语音模型…对着麦克风说话即可对话,按 Ctrl+C 退出。")
+            asyncio.run(_run(agent))
+        else:
+            RealtimeApp(agent).run()
     except KeyboardInterrupt:
         print("\n对话结束")
     finally:

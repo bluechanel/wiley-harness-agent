@@ -20,11 +20,11 @@
 
 - `wy_core.RealtimeAgent` —— 编排循环（打断、回声抑制、收集式 function calling、`send_user_text` 排队）；契约与编排语义详见 [wy-core README](../wy-core/README.md) 的「Realtime」章；
 - 本包 `QwenRealtimeModel` —— `wy_core.RealtimeModel` 的 Qwen 实现（wire 协议翻译）；`MicSource`/`SpeakerSink` —— `wy_core.AudioSource`/`AudioSink` 的 sounddevice 实现；
-- 事件与契约类型（`RealtimeAgent`/`RealtimeEvent`/`UserTranscript`/`AssistantTranscript`/`Interrupted`/`SessionEnded`/`RealtimeError`）定义在 wy_core，本包 re-export——原 `from wy_realtime_agent import ...` 导入路径继续可用。
+- 事件与契约类型（`RealtimeAgent`/`RealtimeEvent`/`RealtimeError` 与全部生命周期事件 dataclass，见「事件参考」）定义在 wy_core，本包 re-export——原 `from wy_realtime_agent import ...` 导入路径继续可用。
 
 ## 安装
 
-要求 Python >= 3.12。运行依赖：`wy-core`、`websockets`、`sounddevice`（PyPI wheel 自带 PortAudio）、`mcp`。
+要求 Python >= 3.12。运行依赖：`wy-core`、`websockets`、`sounddevice`（PyPI wheel 自带 PortAudio）、`mcp`、`textual`（自带 TUI 前端）。
 
 ```bash
 # 方式一：在本 uv workspace 内的其他包中依赖
@@ -61,13 +61,14 @@ model = "qwen-audio-3.0-realtime-plus"
 
 ### 2. 跑起来
 
-装好后直接用控制台入口体验：
+装好后直接用自带入口体验——默认启动 TUI（滚动字幕：用户/助手转写流式上屏，工具与打断/会话状态可见）：
 
 ```bash
-wy-realtime-agent        # 或 workspace 内：uv run wy-realtime-agent
+wy-realtime-agent          # 或 workspace 内：uv run wy-realtime-agent
+wy-realtime-agent --plain  # 纯控制台逐行输出（只打印完成级事件，适合调试与重定向）
 ```
 
-或在代码里消费事件流：
+或在代码里消费事件流（完整词汇见「事件参考」，未列出的事件用空 `case _` 忽略即可）：
 
 ```python
 import asyncio
@@ -75,6 +76,7 @@ import asyncio
 from wy_core import ToolCall, ToolResult
 from wy_realtime_agent import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     Interrupted,
     SessionEnded,
     UserTranscript,
@@ -89,8 +91,10 @@ async def main() -> None:
             match event:
                 case UserTranscript(text=text):
                     print(f"[你] {text}")
+                case AssistantTranscriptDelta(text=text):
+                    print(text, end="", flush=True)  # 回复字幕流式增量
                 case AssistantTranscript(text=text):
-                    print(f"[AI] {text}")
+                    print(f"\r[AI] {text}")
                 case ToolCall(name=name, input=args):
                     print(f"[工具调用] {name} {args}")
                 case ToolResult(name=name, is_error=is_error):
@@ -198,18 +202,30 @@ MCP 语义：`create_agent` 时后台线程建连（30s 超时），**连接失�
 
 ## 事件参考
 
-`run()` 产出 `RealtimeEvent`（定义于 wy_core，本包 re-export），它是六个 dataclass 的联合类型：
+`run()` 产出 `RealtimeEvent`（定义于 wy_core，本包 re-export），覆盖一轮语音对话的完整生命周期，供宿主做细粒度状态管理（按典型时序排列）：
 
 | 事件 | 字段 | 何时产出 |
 |---|---|---|
-| `UserTranscript` | `text: str` | 一段用户语音的转写完成 |
-| `AssistantTranscript` | `text: str` | 一次模型语音回复的转写完成 |
-| `ToolCall`（来自 wy_core） | `id, name, input: dict` | 某个工具即将执行 |
+| `SessionReady` | — | 服务端确认会话配置生效（`session.updated`），可以开始对话 |
+| `SpeechStarted` | — | 用户开始说话（服务端 VAD） |
+| `UserTranscriptDelta` | `text: str, stash: str` | 用户说话中：ASR 流式增量。`text` 为新确定文本（逐段累加），`stash` 为未定暂存尾部（每次整体替换） |
+| `SpeechStopped` | `reason: str \| None` | 用户说话结束（VAD）；smart_turn 判无效轮时 `reason="turn_invalid"` |
+| `UserTranscript` | `text: str` | 一段用户语音的转写完成（权威全文） |
+| `TurnCommitted` | — | 该段语音已提交为对话轮次，模型开始推理（"思考中"起点） |
+| `TurnDiscarded` | — | smart_turn 判定非有效轮次：不会有回复，状态回到空闲 |
+| `ResponseStarted` | `response_id: str \| None` | 模型开始产出一次回复 |
+| `AudioDelta` | `pcm: bytes` | 响应中·语音增量（已解码 PCM，agent 已送扬声器后透出） |
+| `AssistantTranscriptDelta` | `text: str` | 响应中·文本增量（音频模态的字幕，或纯文本模态的正文） |
+| `AssistantTranscript` | `text: str` | 一次模型回复的转写完成（权威全文） |
+| `ResponseDone` | `cancelled: bool` | 一次回复结束；被打断取消时 `cancelled=True` |
+| `ToolCall`（来自 wy_core） | `id, name, input: dict` | 某个工具即将执行（到 `ToolResult` 之间即"执行中"） |
 | `ToolResult`（来自 wy_core） | `id, name, content: str, is_error: bool` | 某个工具执行完毕 |
+| `ToolResultsSubmitted` | `count: int` | 全部工具结果已回写并触发二轮推理（"提交给模型"） |
 | `Interrupted` | `response_id: str \| None` | 用户语音打断了正在进行的回复（仅耳机模式可能发生） |
+| `ErrorEvent` | `type, message: str` | 服务端非致命错误（含 ASR 转写失败），连接仍在 |
 | `SessionEnded` | `reason: str` | 连接结束（服务端关闭或传输错误），`run()` 以此收尾 |
 
-事件只是**透出**给宿主展示/记录用；音频播放、工具执行、结果回写全部由 agent 内部完成，宿主不需要（也不应该）对事件做出协议层响应。
+事件只是**透出**给宿主展示/记录用；音频播放、工具执行、结果回写全部由 agent 内部完成，宿主不需要（也不应该）对事件做出协议层响应。增量与生命周期信号仅供渲染/状态管理，不写审计；被打断回复的残余 `AudioDelta`/`AssistantTranscriptDelta` 会被 agent 抑制，不会透出。
 
 ## 自定义工具
 
@@ -306,7 +322,7 @@ agent = create_agent(config=config, client=client, mic=mic, speaker=speaker, aud
 | `bootstrap` / `create_agent` | 组装入口（见上文） |
 | `RealtimeAgent` | 核心编排（wy_core re-export）：`run()` 产出事件流；`send_user_text()` 注入指令；`close()` 释放资源 |
 | `RealtimeEvent` | 事件联合类型（wy_core re-export） |
-| `UserTranscript` / `AssistantTranscript` / `Interrupted` / `SessionEnded` | 事件 dataclass（wy_core re-export；`ToolCall`/`ToolResult` 从 `wy_core` 导入） |
+| `SessionReady` / `SpeechStarted` / `UserTranscriptDelta` / `SpeechStopped` / `UserTranscript` / `TurnCommitted` / `TurnDiscarded` / `ResponseStarted` / `AudioDelta` / `AssistantTranscriptDelta` / `AssistantTranscript` / `ResponseDone` / `ToolResultsSubmitted` / `Interrupted` / `ErrorEvent` / `SessionEnded` | 生命周期事件 dataclass（wy_core re-export；`ToolCall`/`ToolResult` 从 `wy_core` 导入） |
 | `QwenRealtimeModel` | `wy_core.RealtimeModel` 的 Qwen 实现（factory 内部使用；自定义组装/测试用） |
 | `RealtimeConfig` / `load_realtime_config` | `[realtime]` 配置模型与解析 |
 | `MCPServerConfig` / `load_mcp_config` / `MCPClientManager` | MCP 配置与桥接层 |

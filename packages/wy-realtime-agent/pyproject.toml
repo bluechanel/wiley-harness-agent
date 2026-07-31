@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.28.1",
     "sounddevice>=0.5",
+    "textual>=8.2.8",
     "websockets>=14",
     "wy-core",
 ]

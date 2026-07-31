@@ -12,6 +12,7 @@ import json
 
 from wy_core import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     AudioDelta,
     ErrorEvent,
     FunctionCall,
@@ -19,12 +20,17 @@ from wy_core import (
     ResponseDone,
     ResponseStarted,
     SessionEnded,
+    SessionReady,
     SpeechStarted,
+    SpeechStopped,
     Tool,
     ToolCall,
     ToolResult,
+    ToolResultsSubmitted,
+    TurnCommitted,
     TurnDiscarded,
     UserTranscript,
+    UserTranscriptDelta,
 )
 
 from wy_realtime_agent.protocol import RealtimeClient
@@ -68,19 +74,37 @@ def test_events_translate_wire_dicts_to_typed_events() -> None:
     model, _ws = make_model(
         [
             {"type": "session.created"},  # 词汇之外:静默忽略
+            {"type": "session.updated", "session": {"voice": "x"}},
             {"type": "response.created", "response": {"id": "resp_1"}},
             {"type": "response.audio.delta", "delta": base64.b64encode(pcm).decode()},
             {"type": "input_audio_buffer.speech_started"},
+            {"type": "input_audio_buffer.speech_stopped", "audio_end_ms": 3400},
+            {"type": "input_audio_buffer.speech_stopped", "reason": "turn_invalid"},
+            {"type": "input_audio_buffer.committed", "item_id": "item_0"},
+            {
+                "type": "conversation.item.input_audio_transcription.delta",
+                "item_id": "item_0",
+                "text": "你",
+                "stash": "好",
+            },
+            {"type": "conversation.item.input_audio_transcription.delta", "text": "好"},
             {
                 "type": "conversation.item.input_audio_transcription.completed",
                 "transcript": "你好",
+            },
+            {
+                "type": "conversation.item.input_audio_transcription.failed",
+                "error": {"type": "transcription_error", "message": "ASR failed"},
             },
             {
                 "type": "conversation.item.ambient_audio_transcription.completed",
                 "item_id": "item_1",
                 "text": "嗯",
             },
+            {"type": "response.audio_transcript.delta", "delta": "你好"},
             {"type": "response.audio_transcript.done", "transcript": "你好呀"},
+            {"type": "response.text.delta", "delta": "文本增量"},
+            {"type": "response.text.done", "text": "文本模态全文"},
             {
                 "type": "response.function_call_arguments.done",
                 "call_id": "c1",
@@ -95,12 +119,22 @@ def test_events_translate_wire_dicts_to_typed_events() -> None:
     )
 
     assert collect_events(model) == [
+        SessionReady(),
         ResponseStarted(response_id="resp_1"),
         AudioDelta(pcm=pcm),
         SpeechStarted(),
+        SpeechStopped(reason=None),
+        SpeechStopped(reason="turn_invalid"),
+        TurnCommitted(),
+        UserTranscriptDelta(text="你", stash="好"),
+        UserTranscriptDelta(text="好", stash=""),
         UserTranscript(text="你好"),
+        ErrorEvent(type="transcription_error", message="ASR failed"),
         TurnDiscarded(),
+        AssistantTranscriptDelta(text="你好"),
         AssistantTranscript(text="你好呀"),
+        AssistantTranscriptDelta(text="文本增量"),
+        AssistantTranscript(text="文本模态全文"),
         FunctionCall(call_id="c1", name="echo", arguments={"text": "hi"}),
         ResponseDone(cancelled=False),
         ResponseDone(cancelled=True),
@@ -190,8 +224,11 @@ def test_full_stack_tool_round_through_core_agent() -> None:
 
     assert events == [
         UserTranscript(text="帮我 echo"),
+        ResponseStarted(response_id="resp_1"),
+        ResponseDone(cancelled=False),
         ToolCall(id="c1", name="echo", input={"text": "hi"}),
         ToolResult(id="c1", name="echo", content="hi", is_error=False),
+        ToolResultsSubmitted(count=1),
         AssistantTranscript(text="结果是 hi"),
         SessionEnded(reason="服务端关闭了连接"),
     ]

@@ -1048,7 +1048,7 @@ requires-dist = [
 
 [[package]]
 name = "wy-core"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/wy-core" }
 
 [[package]]
@@ -1058,6 +1058,7 @@ source = { editable = "packages/wy-realtime-agent" }
 dependencies = [
     { name = "mcp" },
     { name = "sounddevice" },
+    { name = "textual" },
     { name = "websockets" },
     { name = "wy-core" },
 ]
@@ -1066,6 +1067,7 @@ dependencies = [
 requires-dist = [
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "sounddevice", specifier = ">=0.5" },
+    { name = "textual", specifier = ">=8.2.8" },
     { name = "websockets", specifier = ">=14" },
     { name = "wy-core", editable = "packages/wy-core" },
 ]

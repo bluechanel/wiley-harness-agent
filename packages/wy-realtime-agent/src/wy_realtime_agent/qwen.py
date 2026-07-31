@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Sequence
 
 from wy_core import (
     AssistantTranscript,
+    AssistantTranscriptDelta,
     AudioDelta,
     ErrorEvent,
     FunctionCall,
@@ -21,10 +22,14 @@ from wy_core import (
     RealtimeModelEvent,
     ResponseDone,
     ResponseStarted,
+    SessionReady,
     SpeechStarted,
+    SpeechStopped,
     Tool,
+    TurnCommitted,
     TurnDiscarded,
     UserTranscript,
+    UserTranscriptDelta,
 )
 
 from wy_realtime_agent.config import RealtimeConfig
@@ -93,19 +98,42 @@ class QwenRealtimeModel(RealtimeModel):
 def _translate(event: dict) -> RealtimeModelEvent | None:
     """一个 Qwen wire 事件 → 一个类型化事件;词汇之外返回 None。"""
     event_type = event.get("type")
+    if event_type == "session.updated":
+        # 服务端确认 session.update 生效,会话就绪(session.created 不透出)。
+        return SessionReady()
     if event_type == "response.created":
         return ResponseStarted(response_id=event.get("response", {}).get("id"))
     if event_type == "response.audio.delta":
         return AudioDelta(pcm=base64.b64decode(event.get("delta", "")))
     if event_type == "input_audio_buffer.speech_started":
         return SpeechStarted()
+    if event_type == "input_audio_buffer.speech_stopped":
+        # smart_turn 判无效轮时带 reason="turn_invalid",有效轮无此字段。
+        return SpeechStopped(reason=event.get("reason"))
+    if event_type == "input_audio_buffer.committed":
+        return TurnCommitted()
+    if event_type == "conversation.item.input_audio_transcription.delta":
+        # ASR 流式增量:text 为新确定的文本,stash 为可被修订的暂存尾部。
+        return UserTranscriptDelta(text=event.get("text", ""), stash=event.get("stash", ""))
     if event_type == "conversation.item.input_audio_transcription.completed":
         return UserTranscript(text=event.get("transcript", ""))
+    if event_type == "conversation.item.input_audio_transcription.failed":
+        error = event.get("error", {})
+        return ErrorEvent(
+            type=error.get("type", "transcription_error"), message=error.get("message", "")
+        )
     if event_type == "conversation.item.ambient_audio_transcription.completed":
         # smart_turn 判定为非有效轮次;ambient 转写本身不透出、不入上下文。
         return TurnDiscarded()
+    if event_type == "response.audio_transcript.delta":
+        return AssistantTranscriptDelta(text=event.get("delta", ""))
     if event_type == "response.audio_transcript.done":
         return AssistantTranscript(text=event.get("transcript", ""))
+    if event_type == "response.text.delta":
+        # 纯文本模态(modalities=["text"])的输出增量,与字幕增量同词汇。
+        return AssistantTranscriptDelta(text=event.get("delta", ""))
+    if event_type == "response.text.done":
+        return AssistantTranscript(text=event.get("text", ""))
     if event_type == "response.function_call_arguments.done":
         return FunctionCall(
             call_id=event.get("call_id", ""),
