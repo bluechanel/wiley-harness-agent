@@ -17,12 +17,17 @@ from wy_core import (
     Usage,
 )
 
+from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionRecord
 import wy_coding_agent.tui.render as render
 
 
 class ChatBackend(Protocol):
+    plan_mode: PlanModeState | None
+
     def stream(self, user_input: str) -> AsyncIterator[AgentEvent]: ...
+
+    def save_state(self) -> None: ...
 
 
 class ChatApp(App[None]):
@@ -196,6 +201,10 @@ class ChatApp(App[None]):
         if user_input.lower() in {"exit", "quit"}:
             self.exit()
             return
+        if user_input == "/plan" or user_input.startswith("/plan "):
+            user_input = await self._enter_plan_mode(user_input)
+            if not user_input:
+                return
 
         await self._mount_markdown(render.user_markdown(user_input))
         self._prompt.disabled = True
@@ -262,5 +271,26 @@ class ChatApp(App[None]):
             await self._mount_markdown(render.error_markdown(exc))
         finally:
             self._prompt.disabled = False
-            self._status.update("就绪")
+            self._status.update(self._ready_status())
             self._prompt.focus()
+
+    async def _enter_plan_mode(self, command: str) -> str:
+        """处理 /plan 本地命令(纯 harness 状态切换,不发给模型);
+        返回需要继续作为用户输入发送的剩余参数,可为空。"""
+        plan_mode = getattr(self.chat, "plan_mode", None)
+        if plan_mode is None:
+            await self._mount_markdown(render.error_markdown("当前后端不支持 plan 模式"))
+            return ""
+        plan_mode.enable()
+        saver = getattr(self.chat, "save_state", None)
+        if callable(saver):
+            saver()  # 回合外的模式切换即时落盘,重启后仍处于 plan 模式
+        await self._mount_view(render.PLAN_MODE_VIEW)
+        self._status.update(self._ready_status())
+        return command[len("/plan"):].strip()
+
+    def _ready_status(self) -> str:
+        plan_mode = getattr(self.chat, "plan_mode", None)
+        if plan_mode is not None and plan_mode.active:
+            return "就绪 · PLAN 模式"
+        return "就绪"

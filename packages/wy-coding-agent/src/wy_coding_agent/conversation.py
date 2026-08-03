@@ -1,6 +1,6 @@
 """会话编排:wy-core Agent 流 + 持久会话记录。"""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 
 from wy_core import (
@@ -14,6 +14,7 @@ from wy_core import (
     Usage,
 )
 
+from wy_coding_agent.reminders import PlanModeState, ReminderProvider
 from wy_coding_agent.session import SessionRecord, SessionStore
 
 
@@ -26,10 +27,24 @@ class ConversationService:
         store: SessionStore,
         *,
         closer: Callable[[], None] | None = None,
+        reminder_providers: Sequence[ReminderProvider] = (),
     ) -> None:
         self._agent = agent
         self._store = store
         self._closer = closer
+        self._reminder_providers = tuple(reminder_providers)
+
+    @property
+    def plan_mode(self) -> PlanModeState | None:
+        """plan 模式状态扩展;未装配(自定义组装)时为 None。"""
+        extension = self._agent.state.get("plan_mode")
+        return extension if isinstance(extension, PlanModeState) else None
+
+    def save_state(self) -> None:
+        """状态快照有变化即追加一条 state 记录(回合外的切换也可即时落盘)。"""
+        snapshot = self._agent.state.snapshot()
+        if snapshot != (self._store.latest_state() or {}):
+            self._store.append_state(snapshot)
 
     def close(self) -> None:
         """Release owned resources (e.g. MCP server connections); idempotent."""
@@ -53,13 +68,20 @@ class ConversationService:
         return self._agent.session.context_tokens
 
     async def stream(self, user_input: str) -> AsyncIterator[AgentEvent]:
-        self._store.append_user(user_input)
+        # 轮询动态 reminder:注入本回合 user 消息尾部,并同步落盘 metadata
+        # 以便恢复会话时重建模型实际看到的消息(见 SessionStore)。
+        reminders = tuple(
+            text
+            for provider in self._reminder_providers
+            if (text := provider.provide()) is not None
+        )
+        self._store.append_user(user_input, reminders=reminders)
         session = self._agent.session
         start = len(session.messages)  # 本回合消息的起点,落盘文本从这里提取
         before = replace(session.total_usage)
 
         try:
-            async for event in self._agent.run(user_input):
+            async for event in self._agent.run(user_input, reminders=reminders):
                 if isinstance(event, ToolCall):
                     self._store.append_tool_call(
                         tool_name=event.name,
@@ -107,6 +129,8 @@ class ConversationService:
                         total_usage=event.usage,
                         metadata={"context_tokens": event.context_tokens},
                     )
+                    # 回合内的状态变化(如 exit_plan_mode)在回合收尾统一落盘。
+                    self.save_state()
                 yield event
         except Exception as exc:
             self._store.append_assistant(

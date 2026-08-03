@@ -73,12 +73,14 @@ from wy_core.realtime_model import (
     UserTranscriptDelta,
 )
 from wy_core.session import Session
+from wy_core.state import AgentState, StateExtension
 from wy_core.tool import Tool, ToolCall, ToolResult
 
 __all__ = [
     "Agent",
     "AgentError",
     "AgentEvent",
+    "AgentState",
     "AssistantTranscript",
     "AssistantTranscriptDelta",
     "AudioDelta",
@@ -107,6 +109,7 @@ __all__ = [
     "SessionReady",
     "SpeechStarted",
     "SpeechStopped",
+    "StateExtension",
     "TextBlock",
     "TextDelta",
     "ThinkingBlock",

@@ -32,6 +32,10 @@ from wy_coding_agent.prompt_template import (
     build_prompt,
     default_prompt_providers,
 )
+from wy_coding_agent.reminders import (
+    PlanModeState,
+    ReminderProvider,
+)
 from wy_coding_agent.session import (
     SessionError,
     SessionRecord,
@@ -40,6 +44,7 @@ from wy_coding_agent.session import (
 from wy_coding_agent.skills import Skill, default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent_tool import AgentTool
+from wy_coding_agent.tools.plan import ExitPlanModeTool
 from wy_coding_agent.tools.skill import SkillTool
 
 __all__ = [
@@ -52,11 +57,14 @@ __all__ = [
     "ConfigError",
     "ConversationService",
     "DEFAULT_TOOLS",
+    "ExitPlanModeTool",
     "MCPClientManager",
     "MCPServerConfig",
     "MemoryProvider",
     "ModelProvider",
+    "PlanModeState",
     "RedactedThinkingBlock",
+    "ReminderProvider",
     "SessionError",
     "SessionRecord",
     "SessionStore",

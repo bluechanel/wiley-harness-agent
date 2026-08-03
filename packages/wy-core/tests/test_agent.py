@@ -34,6 +34,19 @@ def test_纯文本回合():
     assert model.calls[0]["tools"] is None  # 无工具时不带 tools
 
 
+def test_reminders_注入_user_消息尾部():
+    model = FakeModel([[make_text_end("好")]])
+    agent = Agent(model=model, audit=None)
+    run_events(agent, "hi", reminders=("处于 plan 模式",))
+
+    first = model.calls[0]["messages"][0]
+    assert first.role == "user"
+    assert [b.text for b in first.content] == [
+        "hi",
+        "<system-reminder>\n处于 plan 模式\n</system-reminder>",
+    ]
+
+
 def test_工具回合():
     model = FakeModel(
         [

@@ -21,8 +21,19 @@
 
 ## 会话持久化与编排
 
-- `session.py` 的 `SessionStore`/`SessionRecord`：JSONL 逐条追加(flush + fsync)、按 id 恢复。文件格式与旧 wiley-agent 会话完全兼容——usage 序列化沿用 `cache_creation_input_tokens`/`cache_read_input_tokens` 键名（对应 `wy_core.Usage` 的 `cache_write_tokens`/`cache_read_tokens`，经 `usage_to_dict`/`usage_from_mapping` 映射）。记录形态：user/input、tool_call、tool_output、assistant/thinking、assistant/answer（usage 为本回合增量、total_usage 为累计、metadata.context_tokens 为回合后上下文规模）、assistant/error、assistant/compaction（content 为摘要、metadata.dropped 为被总结条数）。
+- `session.py` 的 `SessionStore`/`SessionRecord`：JSONL 逐条追加(flush + fsync)、按 id 恢复。文件格式与旧 wiley-agent 会话完全兼容——usage 序列化沿用 `cache_creation_input_tokens`/`cache_read_input_tokens` 键名（对应 `wy_core.Usage` 的 `cache_write_tokens`/`cache_read_tokens`，经 `usage_to_dict`/`usage_from_mapping` 映射）。记录形态：user/input（metadata.reminders 为本回合注入的 system-reminder 列表）、tool_call、tool_output、assistant/thinking、assistant/answer（usage 为本回合增量、total_usage 为累计、metadata.context_tokens 为回合后上下文规模）、assistant/error、assistant/compaction（content 为摘要、metadata.dropped 为被总结条数）、state/state（content 为 `AgentState.snapshot()` 聚合快照，见"Agent 状态管理"）。
 - `conversation.py` 的 `ConversationService` 包 `wy_core.Agent`：把 `AgentEvent` 流写入会话记录并原样透传给 UI。落盘的思考/正文取自本回合组装完成的 assistant 消息（增量事件只是实时渲染的装饰，可能不完整）；回合起点在收到 `Compaction` 事件时按 `dropped` 重新锚定。异常写 assistant/error 记录后向上抛（wy-core 侧已回滚内存会话）。`close()` 释放 MCP 连接（factory 注入 closer），宿主 finally 里调用。
+
+## Reminders 与 plan 模式
+
+- `reminders.py` 是动态 system-reminder 层,与 `prompt_template` 的静态 provider 对称:`ReminderProvider` 协议(`provide() -> str | None`)每个用户回合被 `ConversationService` 轮询一次,结果经 `wy_core.Agent.run(reminders=...)` 注入本回合 user 消息尾部的 `<system-reminder>` 文本块——前缀(system prompt/工具/既有历史)不变以保前缀缓存,过期提示随早期历史被压缩摘要掉。新增"每回合可变状态提示"一律走这层,不改 system prompt。
+- plan 模式即第一个应用:`PlanModeState`(factory 构造并总是装配)激活期**每回合重复注入**约束提示(消息流尾部约束力弱于 system prompt,重复注入是刻意补偿),`disable()` 后下一回合一次性注入"已退出"提示。它同时是 `wy_core.StateExtension`(key=`plan_mode`):`active` 随状态快照持久化、恢复会话不丢模式,一次性退出提示是易失状态不持久化。`tools/plan.py` 的 `ExitPlanModeTool` 与 `SkillTool`/`MCPTool` 同型(模块只有类,不进 `DEFAULT_TOOLS`),持共享状态,模型提交 `plan`(Markdown)即翻转状态退出;在 factory 中与 `AgentTool` 一样于工具集快照**之后**追加——子 agent 不含也不可控制 plan 模式。TUI 在 `on_input_submitted` 本地拦截 `/plan [args]`(harness 状态切换,不发给模型;有 args 则开模式后把 args 作为用户输入继续发送),切换后即调 `save_state()` 落盘,状态栏就绪文案显示"PLAN 模式";`render.tool_call_view` 对 `exit_plan_mode` 的非空 plan 直接以 Markdown 展开展示(不折叠不围栏)。**当前 v1 无用户审批对话框、无工具硬拦截**(plan 模式下 edit/write/bash 仍可执行,仅靠提示约束),两者随后续工具权限层补充。
+- 持久化保真:`SessionStore.append_user(content, reminders=...)` 把 reminders 存入 metadata(content 仍是原始输入,TUI 历史渲染不受影响),`conversation_messages()` 恢复时按 metadata 重建含 reminder 块的 user 消息,保证回灌历史与模型当时所见一致。
+
+## Agent 状态管理
+
+- 状态容器用 `wy_core.AgentState`(factory 组装:`AgentState(session=..., extensions=(plan_mode,))` 传 `Agent(state=...)`),应用侧扩展继承 `wy_core.StateExtension`。持久化走现有会话 JSONL:`SessionStore.append_state(snapshot)` 追加 role=`state` 记录(content 即 `AgentState.snapshot()` 聚合快照),`latest_state()` 倒序取最近一条;恢复路径在 factory 回灌消息后 `state.restore(latest_state)`。落盘时机两处:`ConversationService` 在回合收尾(append_assistant 之后)调 `save_state()`——快照与最近一条 state 记录不同才追加;回合外的切换(TUI `/plan`)由宿主显式调 `save_state()` 即时落盘。`conversation_messages()`/TUI 渲染天然跳过 state 记录(render_record 对未知 role 返回空列表)。
+- 预留:file-read 状态(read-before-edit、外部修改检测,原 `file_state.py` 的职责)将作为第二个 `StateExtension` 补入,前置条件是工具获取 per-agent 状态的机制定型(工具实例化 vs execute 上下文,与权限层一并设计);在那之前不要往工具层塞跨调用状态。realtime agent 无持久化状态语义(服务端持上下文),不接状态层。
 
 ## MCP client
 

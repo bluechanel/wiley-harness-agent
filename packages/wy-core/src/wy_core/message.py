@@ -7,6 +7,7 @@ Model 实现自行完成两侧格式翻译。
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
 
@@ -67,9 +68,20 @@ class Message:
         return asdict(self)
 
 
-def user_message(text: str) -> Message:
-    """构造纯文本 user 消息。"""
-    return Message(role="user", content=[TextBlock(text)])
+def user_message(text: str, *, reminders: Sequence[str] = ()) -> Message:
+    """构造纯文本 user 消息。
+
+    reminders 中的每条提示以 ``<system-reminder>`` 包裹后作为额外文本块
+    追加在正文之后——harness 状态(模式、通知等)经此注入消息流尾部,
+    前缀(system prompt/工具/既有历史)保持不变,不破坏厂商的前缀缓存;
+    核心不理解提示内容,注入什么、何时注入由调用方决定。
+    """
+    blocks: list[Block] = [TextBlock(text)]
+    blocks.extend(
+        TextBlock(f"<system-reminder>\n{reminder}\n</system-reminder>")
+        for reminder in reminders
+    )
+    return Message(role="user", content=blocks)
 
 
 @dataclass

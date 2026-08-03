@@ -10,12 +10,12 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from wy_core import Message, TextBlock, Usage, user_message
 
-SessionRole = Literal["assistant", "user", "tool_call", "tool_output"]
+SessionRole = Literal["assistant", "user", "tool_call", "tool_output", "state"]
 
 
 class SessionError(RuntimeError):
@@ -61,7 +61,7 @@ class SessionRecord:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SessionRecord":
         role = value.get("role")
-        if role not in {"assistant", "user", "tool_call", "tool_output"}:
+        if role not in {"assistant", "user", "tool_call", "tool_output", "state"}:
             raise SessionError(f"不支持的会话消息角色：{role!r}")
         usage_value = _as_mapping(value.get("usage"))
         total_usage_value = _as_mapping(value.get("total_usage"))
@@ -139,26 +139,44 @@ class SessionStore:
         """Restore only completed user/assistant turns as wy-core messages."""
         messages: list[Message] = []
         pending_user: str | None = None
+        pending_reminders: tuple[str, ...] = ()
 
         for record in self._records:
             if record.role == "user" and isinstance(record.content, str):
                 pending_user = record.content
+                pending_reminders = _reminders_from(record.metadata)
             elif (
                 record.role == "assistant"
                 and record.kind == "answer"
                 and isinstance(record.content, str)
                 and pending_user is not None
             ):
-                messages.append(user_message(pending_user))
+                # 带上落盘的 reminders,恢复出模型当时实际看到的 user 消息。
+                messages.append(user_message(pending_user, reminders=pending_reminders))
                 messages.append(
                     Message(role="assistant", content=[TextBlock(record.content)])
                 )
                 pending_user = None
+                pending_reminders = ()
 
         return messages
 
-    def append_user(self, content: str) -> SessionRecord:
-        return self._append(role="user", content=content, kind="input")
+    def append_user(
+        self, content: str, *, reminders: Sequence[str] = ()
+    ) -> SessionRecord:
+        metadata = {"reminders": list(reminders)} if reminders else None
+        return self._append(role="user", content=content, kind="input", metadata=metadata)
+
+    def append_state(self, snapshot: Mapping[str, Any]) -> SessionRecord:
+        """追加一条 agent 状态聚合快照(wy_core.AgentState.snapshot 的结果)。"""
+        return self._append(role="state", content=dict(snapshot), kind="state")
+
+    def latest_state(self) -> Mapping[str, Any] | None:
+        """最近一条状态快照;没有 state 记录时返回 None。"""
+        for record in reversed(self._records):
+            if record.role == "state" and isinstance(record.content, Mapping):
+                return record.content
+        return None
 
     def append_assistant(
         self,
@@ -292,6 +310,13 @@ def _normalize_session_id(value: str) -> str:
         return str(UUID(value))
     except ValueError as exc:
         raise SessionError(f"无效的 session_id：{value}") from exc
+
+
+def _reminders_from(metadata: Mapping[str, Any] | None) -> tuple[str, ...]:
+    value = (metadata or {}).get("reminders")
+    if isinstance(value, list):
+        return tuple(str(item) for item in value)
+    return ()
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any] | None:

@@ -23,6 +23,11 @@ class MessageView:
 
 WELCOME_VIEW = MessageView("### 助手\n\n你好！我是你的 AI 助手。直接输入消息开始对话。")
 
+PLAN_MODE_VIEW = MessageView(
+    "### 系统\n\n已进入 plan 模式：助手将只调研与设计，"
+    "完成后经 `exit_plan_mode` 提交计划并自动退出。"
+)
+
 _TOOL_PAYLOAD_MAX_LINES = 30
 _TOOL_PAYLOAD_MAX_CHARS = 2000
 
@@ -55,6 +60,11 @@ def reasoning_view(text: str) -> MessageView:
 
 
 def tool_call_view(tool_name: str, arguments: object) -> MessageView:
+    if tool_name == "exit_plan_mode" and isinstance(arguments, dict):
+        plan = str(arguments.get("plan", ""))
+        if plan.strip():
+            # 计划是给用户审阅的正文,直接以 Markdown 展开,不折叠不围栏。
+            return MessageView(f"### 📋 计划\n\n{plan}")
     return MessageView(
         _payload_markdown(arguments),
         classes="tool",

@@ -53,11 +53,11 @@ class BoomTool(Tool):
         raise RuntimeError("炸了")
 
 
-def run_events(agent: Agent, prompt: str) -> list:
+def run_events(agent: Agent, prompt: str, **kwargs) -> list:
     """同步跑完一个回合,收集全部 AgentEvent(仓库测试不引入 pytest-asyncio)。"""
 
     async def go() -> list:
-        return [event async for event in agent.run(prompt)]
+        return [event async for event in agent.run(prompt, **kwargs)]
 
     return asyncio.run(go())
 

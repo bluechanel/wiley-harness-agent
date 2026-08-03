@@ -11,6 +11,7 @@ from wy_core.log import AuditLog
 from wy_core.message import Message, ToolResultBlock, ToolUseBlock, Usage, user_message
 from wy_core.model import Model, ModelEnd, ModelError, TextDelta, ThinkingDelta
 from wy_core.session import Session
+from wy_core.state import AgentState
 from wy_core.tool import Tool, ToolCall, ToolResult
 
 
@@ -41,10 +42,13 @@ _DEFAULT_AUDIT = cast(AuditLog, object())  # 哨兵:区分"未传 audit"与显�
 
 
 class Agent:
-    """把 Model、Tool 与 Session 组装为完整 agent。
+    """把 Model、Tool 与 AgentState(Session + 状态扩展)组装为完整 agent。
 
-    审计默认开启:省略 ``audit`` 即写入 CWD/.wy_audit/,显式传
-    ``audit=None`` 关闭。单个 Agent 实例不支持并发 ``run``。
+    ``state``/``session`` 只能传其一:只传 ``session``(或都不传)时内部
+    包装为无扩展的 ``AgentState``,``agent.session`` 始终是
+    ``state.session`` 的兼容别名。审计默认开启:省略 ``audit`` 即写入
+    CWD/.wy_audit/,显式传 ``audit=None`` 关闭。单个 Agent 实例不支持
+    并发 ``run``。
     """
 
     def __init__(
@@ -54,6 +58,7 @@ class Agent:
         tools: Sequence[Tool] = (),
         system: str | None = None,
         session: Session | None = None,
+        state: AgentState | None = None,
         audit: AuditLog | None = _DEFAULT_AUDIT,
         max_iterations: int = 50,
     ) -> None:
@@ -62,13 +67,28 @@ class Agent:
         if len(self.tools) != len(tools):
             raise ValueError("工具名重复")
         self.system = system
-        self.session = session if session is not None else Session()
+        if state is not None and session is not None:
+            raise ValueError("session 与 state 只能传其一")
+        self.state = state if state is not None else AgentState(session=session)
+        self.session = self.state.session  # 兼容别名,与 state.session 恒为同一对象
         self.audit = AuditLog.default() if audit is _DEFAULT_AUDIT else audit
         self.max_iterations = max_iterations
-        self._audit("agent_start", {"model": model.name, "tools": list(self.tools)})
+        self._audit(
+            "agent_start",
+            {
+                "model": model.name,
+                "tools": list(self.tools),
+                "state": list(self.state.extensions),
+            },
+        )
 
-    async def run(self, user_input: str) -> AsyncIterator[AgentEvent]:
+    async def run(
+        self, user_input: str, *, reminders: Sequence[str] = ()
+    ) -> AsyncIterator[AgentEvent]:
         """执行一个用户回合,流式产出 AgentEvent,以 TurnEnd 收尾。
+
+        reminders 作为 ``<system-reminder>`` 文本块追加在本回合 user 消息
+        尾部(见 ``user_message``),供调用方注入模式、通知等动态状态。
 
         回合内任何异常(含消费方中途关闭流)都会:写一条 error 审计,
         并回滚本回合追加的消息,保持会话处于上一个完整回合的状态;
@@ -77,11 +97,13 @@ class Agent:
         checkpoint = len(self.session.messages)
         compacted = False
         try:
-            self.session.append(user_message(user_input))
+            self.state.turn_start()
+            self.session.append(user_message(user_input, reminders=reminders))
             for _ in range(self.max_iterations):
                 if self.session.needs_compaction():
                     info = await self.session.compact(self.model)
                     compacted = True
+                    self.state.compaction(info["dropped"])
                     self._audit("compaction", info)
                     yield Compaction(dropped=info["dropped"], summary=info["summary"])
 
@@ -119,6 +141,7 @@ class Agent:
 
                 tool_uses = [b for b in end.message.content if isinstance(b, ToolUseBlock)]
                 if end.stop_reason != "tool_use" or not tool_uses:
+                    self.state.turn_end()
                     yield TurnEnd(
                         usage=replace(self.session.total_usage),
                         context_tokens=self.session.context_tokens,
@@ -149,6 +172,7 @@ class Agent:
             self._audit("error", {"type": type(exc).__name__, "error": str(exc)})
             if not compacted:
                 del self.session.messages[checkpoint:]
+            self.state.rollback()
             raise
 
     async def _execute(self, block: ToolUseBlock) -> tuple[str, bool]:

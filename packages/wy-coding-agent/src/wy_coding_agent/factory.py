@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from wy_core import Agent, AuditLog, Model, Session, Tool
+from wy_core import Agent, AgentState, AuditLog, Model, Session, Tool
 
 from wy_coding_agent.anthropic import AnthropicModel
 from wy_coding_agent.config import (
@@ -21,10 +21,12 @@ from wy_coding_agent.prompt_template import (
     build_prompt,
     default_prompt_providers,
 )
+from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionStore
 from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent_tool import AgentTool
+from wy_coding_agent.tools.plan import ExitPlanModeTool
 from wy_coding_agent.tools.skill import SkillTool
 
 
@@ -83,11 +85,14 @@ def create_agent(
     """Create an agent backed by a durable session.
 
     传入 session_id 时恢复既有会话（完成的问答对回灌 wy-core 会话，累计
-    用量与上下文规模一并恢复）；省略时自动生成 UUID 新会话。model 必填：
+    用量、上下文规模与最近一条状态快照——如 plan 模式——一并恢复）；
+    省略时自动生成 UUID 新会话。model 必填：
     宿主按 `wy_core.Model` 契约实现后注入，厂商参数在构造期给定。
     tools 按 `wy_core.Tool` 契约编写后传入，省略时无本地工具（仅配置的
     MCP 工具可用）；名为 `agent` 的子 agent 派生工具总是额外装配（复用
-    同一 model 与既有工具集，见 `tools/agent_tool.py`）。prompt_providers
+    同一 model 与既有工具集，见 `tools/agent_tool.py`），`exit_plan_mode`
+    工具与 plan 模式状态同样总是装配（`/plan` 交互见 TUI；约束提示经
+    reminders 层逐回合注入，返回值的 `plan_mode` 属性供宿主切换）。prompt_providers
     省略时使用
     default_prompt_providers(model.name, workspace, skills) 的默认组合；
     sessions_dir 省略时写入当前目录 .agent_session/。mcp_config 为 MCP
@@ -124,6 +129,8 @@ def create_agent(
         ),
     )
     # agent 工具持有追加前的工具集快照:子 agent 不含 agent 工具,杜绝嵌套派生。
+    # exit_plan_mode 同样在快照之后追加:plan 模式属主会话状态,子 agent 不可控制。
+    plan_mode = PlanModeState()
     all_tools = all_tools + (
         AgentTool(
             model=model,
@@ -133,6 +140,7 @@ def create_agent(
             max_context_tokens=compaction.max_context_tokens,
             keep_recent=compaction.keep_recent,
         ),
+        ExitPlanModeTool(plan_mode),
     )
     names = [tool.name for tool in all_tools]
     duplicates = {name for name in names if names.count(name) > 1}
@@ -149,13 +157,17 @@ def create_agent(
         session.append(message)
     session.total_usage = store.total_usage
     session.context_tokens = store.last_context_tokens
+    state = AgentState(session=session, extensions=(plan_mode,))
+    latest_state = store.latest_state()
+    if latest_state is not None:
+        state.restore(dict(latest_state))
 
     try:
         agent = Agent(
             model=model,
             tools=all_tools,
             system=system,
-            session=session,
+            state=state,
             audit=(
                 AuditLog(store.path.with_suffix(".audit.jsonl")) if audit else None
             ),
@@ -168,4 +180,5 @@ def create_agent(
         agent,
         store,
         closer=mcp_manager.close if mcp_manager is not None else None,
+        reminder_providers=(plan_mode,),
     )

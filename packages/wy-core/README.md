@@ -192,12 +192,15 @@ Agent(
     tools: Sequence[Tool] = (),      # 工具名重复抛 ValueError
     system: str | None = None,       # 系统提示词
     session: Session | None = None,  # 省略 = 新建默认 Session
+    state: AgentState | None = None, # 与 session 互斥；见「状态管理」章
     audit: AuditLog | None = ...,    # 省略 = 写 CWD/.wy_audit/；显式 None 关闭
     max_iterations: int = 50,        # 单回合模型请求次数上限，超限抛 AgentError
 )
 ```
 
-`run(user_input: str)` 执行一个用户回合：压缩检查 → 模型流 → 并发执行 tool_use → 结果回填 → 再次请求模型……直到 `stop_reason` 非 `"tool_use"`，以 `TurnEnd` 收尾。
+`state` 与 `session` 只能传其一：只传 `session`（或都不传）时内部包装为无扩展的 `AgentState`；`agent.session` 始终是 `agent.state.session` 的别名，既有代码不受影响。
+
+`run(user_input: str, *, reminders: Sequence[str] = ())` 执行一个用户回合：压缩检查 → 模型流 → 并发执行 tool_use → 结果回填 → 再次请求模型……直到 `stop_reason` 非 `"tool_use"`，以 `TurnEnd` 收尾。`reminders` 中的每条提示以 `<system-reminder>` 包裹后作为额外文本块追加在本回合 user 消息尾部——供 harness 注入模式、通知等动态状态：前缀（system prompt/工具/既有历史）保持不变，不破坏厂商的前缀缓存；核心不理解提示内容，注入什么、何时注入由调用方决定。
 
 产出的 `AgentEvent` 是六个 dataclass 的联合类型：
 
@@ -212,13 +215,22 @@ Agent(
 
 **异常与回滚**：回合内任何异常（模型 `ModelError`、超限 `AgentError`，也包括**消费方中途 break/关闭事件流**）都会写一条 error 审计，并回滚本回合追加的全部消息，把会话保持在上一个完整回合的状态（本回合已发生过压缩时历史结构已变，跳过回滚）。换言之：**中途停止消费 = 本回合作废**。
 
+## 状态管理
+
+`wy_core.state` 提供 agent 状态的统一容器，位于 `AgentState`：
+
+- `AgentState(session=None, extensions=())`：聚合 `Session`（对话历史/用量）与命名状态扩展；`get(key)` 取扩展，`snapshot()` 聚合各扩展快照为 `{key: data}`（跳过返回 None 的扩展），`restore(data)` 按 key 分发恢复（未知 key 忽略，前向兼容）。
+- `StateExtension`：继承并覆写所需方法即得一个扩展——`key`（唯一名）、`snapshot() -> dict | None`（None = 不持久化的易失状态）、`restore(data)`，以及四个生命周期钩子 `on_turn_start`/`on_turn_end`/`on_rollback`/`on_compaction(dropped)`，由 Agent 在回合入口、TurnEnd 前、异常回滚后、压缩后分别调用（钩子不得抛异常）。
+
+**持久化的分层**：内存状态是权威，持久化是它的投影——核心只定义快照/恢复契约，何时落盘、落到哪里由使用方决定（参考实现：wy-coding-agent 把聚合快照作为 `state` 记录追加进会话 JSONL，恢复会话时取最后一条回灌）。
+
 ## 消息词汇
 
 全库统一的消息定义，位于 `wy_core.message`：
 
 - 内容块：`TextBlock(text)`、`ThinkingBlock(thinking, signature="")`、`ToolUseBlock(id, name, input)`、`ToolResultBlock(tool_use_id, content, is_error=False)`；每个块自带 `type` 标签，`Block` 为四者联合。
 - `Message(role, content)`：`role` 为 `"user"` 或 `"assistant"`，`content` 为块列表；`.text` 属性拼接全部文本块，`.to_dict()` 转可 JSON 序列化字典。
-- `user_message(text)`：构造纯文本 user 消息的快捷函数。
+- `user_message(text, *, reminders=())`：构造纯文本 user 消息的快捷函数；`reminders` 逐条以 `<system-reminder>` 包裹为额外文本块追加在正文之后（语义见「Agent 循环」）。
 - `Usage(input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)`：`.context_tokens` 属性为四分量之和（近似请求完成后的上下文规模），`.add(other)` 用于累计。
 
 **块联合允许应用侧扩展**：核心逐块 `isinstance` 判断，未知块随消息原样携带（例：wy-coding-agent 的 `RedactedThinkingBlock`），由你的 `Model` 实现负责其 wire 翻译。
@@ -351,6 +363,7 @@ RealtimeAgent(
 | `TextDelta` / `ThinkingDelta` / `ModelEnd` | 模型流事件 dataclass |
 | `Tool` | 工具抽象契约 |
 | `Session` | 内存态会话与自动压缩 |
+| `AgentState` / `StateExtension` | agent 状态容器与命名扩展契约（快照/恢复 + 生命周期钩子） |
 | `AuditLog` | JSONL 审计日志 |
 | `Message` / `Block` / `TextBlock` / `ThinkingBlock` / `ToolUseBlock` / `ToolResultBlock` | 统一消息词汇 |
 | `Usage` / `user_message` | 用量统计与 user 消息快捷构造 |

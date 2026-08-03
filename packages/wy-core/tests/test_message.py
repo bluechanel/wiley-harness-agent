@@ -37,6 +37,16 @@ def test_user_message():
     message = user_message("提问")
     assert message.role == "user"
     assert message.text == "提问"
+    assert message.content == [TextBlock("提问")]
+
+
+def test_user_message_追加_system_reminder_块():
+    message = user_message("提问", reminders=["处于 plan 模式", "文件已变更"])
+    assert [b.text for b in message.content] == [
+        "提问",
+        "<system-reminder>\n处于 plan 模式\n</system-reminder>",
+        "<system-reminder>\n文件已变更\n</system-reminder>",
+    ]
 
 
 def test_usage_累计与上下文规模():

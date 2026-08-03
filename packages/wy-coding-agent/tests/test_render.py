@@ -38,6 +38,17 @@ def test_tool_call_view_renders_arguments_as_json() -> None:
     assert view.collapsible_title == "工具调用：bash"
     assert view.classes == "tool"
     assert '"command": "ls -la"' in view.markdown
+
+
+def test_exit_plan_mode_call_renders_plan_expanded() -> None:
+    view = render.tool_call_view("exit_plan_mode", {"plan": "## 方案\n1. 做事"})
+    assert view.collapsible_title == ""  # 计划直接展开供审阅,不折叠
+    assert view.markdown == "### 📋 计划\n\n## 方案\n1. 做事"
+
+
+def test_exit_plan_mode_call_empty_plan_falls_back() -> None:
+    view = render.tool_call_view("exit_plan_mode", {"plan": " "})
+    assert view.collapsible_title == "工具调用：exit_plan_mode"
     assert "```json" in view.markdown
 
 
