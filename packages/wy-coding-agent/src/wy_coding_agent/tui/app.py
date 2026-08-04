@@ -1,10 +1,18 @@
-"""Textual chat application. Displays what the agent layer streams and records."""
+"""Textual chat application styled after Claude Code's terminal UI.
 
+界面仿照 Claude Code:无 Header/Footer 的滚动会话区(启动横幅 + 沟槽
+符号行),回合进行中在输入框上方显示动画活动行,底部是圆角输入框与
+提示/用量行。本层只做界面组件与交互;记录/事件到视图的解析在 render。
+"""
+
+import time
 from typing import AsyncIterator, Protocol
 
+from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Collapsible, Footer, Header, Input, Markdown, Static
+from textual.widgets import Collapsible, Input, Markdown, Static
 
 from wy_core import (
     AgentEvent,
@@ -31,8 +39,9 @@ class ChatBackend(Protocol):
 
 
 class ChatApp(App[None]):
-    """Textual chat interface with Markdown rendering."""
+    """Claude Code 风格的聊天界面。"""
 
+    # 调色板与 render.py 的常量保持一致(CSS 无法引用 Python 常量)。
     CSS = """
     Screen {
         background: $surface;
@@ -40,8 +49,8 @@ class ChatApp(App[None]):
 
     #conversation {
         height: 1fr;
-        border: round $primary;
         padding: 1 2 0 2;
+        scrollbar-size-vertical: 1;
     }
 
     #message-list {
@@ -50,47 +59,202 @@ class ChatApp(App[None]):
         align: left bottom;
     }
 
-    #message-list > Markdown {
+    #message-list > .banner {
+        border: round #D77757;
+        width: auto;
+        padding: 0 2;
         margin: 0 0 1 0;
     }
 
-    #message-list > Collapsible {
+    #message-list > .line {
         margin: 0 0 1 0;
-        border-top: none;
-        padding-bottom: 0;
-    }
-
-    #message-list > Collapsible.reasoning Markdown {
-        color: #9A9A9A;
-    }
-
-    #message-list > Collapsible.tool Markdown {
         color: #8A8A8A;
     }
 
+    #message-list > Markdown {
+        margin: 0 0 1 0;
+        padding: 0;
+        background: transparent;
+    }
+
+    #message-list > .plan {
+        border: round #D77757;
+        border-title-color: #D77757;
+        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+
+    #message-list > .row {
+        height: auto;
+        margin: 0 0 1 0;
+    }
+
+    #message-list > .row > .gutter {
+        width: 2;
+        color: $text;
+    }
+
+    #message-list > .row > .body {
+        width: 1fr;
+    }
+
+    #message-list > .row > Markdown {
+        width: 1fr;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+    }
+
+    #message-list > .user > .gutter {
+        color: #8A8A8A;
+    }
+
+    #message-list > .user > .body {
+        color: #B0B0B0;
+    }
+
+    #message-list > .error > .gutter,
+    #message-list > .error > .body {
+        color: #E5484D;
+    }
+
+    /* Claude Code 风格折叠块:去掉 Collapsible 自带的分隔线与底色,
+       只留"符号 + 标题"一行;正文缩进到符号沟槽之后。 */
+    #message-list Collapsible {
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin: 0 0 1 0;
+    }
+
+    #message-list Collapsible > CollapsibleTitle {
+        padding: 0;
+        background: transparent;
+        color: $text;
+        text-style: none;
+    }
+
+    #message-list Collapsible > CollapsibleTitle:hover {
+        background: $panel;
+        color: $text;
+    }
+
+    #message-list Collapsible > CollapsibleTitle:focus {
+        background: $panel;
+        color: $text;
+        text-style: none;
+    }
+
+    #message-list Collapsible Contents {
+        padding: 0 0 0 2;
+    }
+
+    #message-list Collapsible Markdown {
+        margin: 0 0 1 0;
+        padding: 0;
+        background: transparent;
+    }
+
+    #message-list > .thinking > CollapsibleTitle {
+        color: #8A8A8A;
+        text-style: italic;
+    }
+
+    #message-list > .thinking Markdown {
+        color: #9A9A9A;
+    }
+
+    /* 工具调用与其输出贴紧成组,组后留一行空隙。 */
+    #message-list > .tool-call {
+        margin: 0;
+    }
+
+    #message-list > .tool-call > CollapsibleTitle {
+        color: #4EBF71;
+    }
+
+    #message-list > .tool-result {
+        padding: 0 0 0 2;
+    }
+
+    #message-list > .tool-result > CollapsibleTitle {
+        color: #8A8A8A;
+    }
+
+    #message-list > .tool-result.error > CollapsibleTitle {
+        color: #E5484D;
+    }
+
+    #message-list > .compaction > CollapsibleTitle {
+        color: #8A8A8A;
+    }
+
+    #message-list Collapsible Markdown,
+    #message-list > .tool-result Markdown,
+    #message-list > .tool-call Markdown {
+        color: #9A9A9A;
+    }
+
+    #activity {
+        height: 1;
+        margin: 1 2 0 2;
+        display: none;
+    }
+
+    #activity.running {
+        display: block;
+    }
+
+    #input-area {
+        height: 3;
+        margin: 1 2 0 2;
+        padding: 0 1;
+        border: round #565656;
+    }
+
+    #input-area:focus-within {
+        border: round #D77757;
+    }
+
+    #input-prompt {
+        width: 2;
+        color: $text;
+        text-style: bold;
+    }
+
     #prompt {
-        margin: 1 0 0 0;
-        border: round $accent;
+        width: 1fr;
+        height: 1;
+        border: none;
+        padding: 0;
+        background: transparent;
+    }
+
+    #prompt:focus {
+        border: none;
+        background: transparent;
+        background-tint: $foreground 0%;
     }
 
     #status-bar {
         height: 1;
-        margin: 0 1;
+        margin: 0 3;
     }
 
     #status {
         width: 1fr;
-        color: $text-muted;
     }
 
     #usage {
         width: auto;
-        color: $text-muted;
+        color: #8A8A8A;
     }
     """
 
     TITLE = "Wy Coding Agent"
-    SUB_TITLE = "Markdown chat · 输入 exit 或 quit 退出"
+    BINDINGS = [
+        Binding("ctrl+d", "quit", "退出", show=False),
+    ]
 
     def __init__(
         self,
@@ -100,6 +264,9 @@ class ChatApp(App[None]):
         history: tuple[SessionRecord, ...] = (),
         total_usage: Usage | None = None,
         context_tokens: int = 0,
+        model_name: str = "",
+        workspace: str = "",
+        context_limit: int = 0,
     ) -> None:
         super().__init__()
         self.chat = chat
@@ -107,41 +274,47 @@ class ChatApp(App[None]):
         self.history = history
         self.total_usage = total_usage if total_usage is not None else Usage()
         self.context_tokens = context_tokens
+        self.model_name = model_name
+        self.workspace = workspace
+        self.context_limit = context_limit
+        self._spinner_tick = 0
+        self._turn_started = 0.0
+        self._activity_verb = ""
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical():
-            with VerticalScroll(id="conversation"):
-                yield Vertical(id="message-list")
-            yield Input(
-                placeholder="输入消息（支持 Markdown），按 Enter 发送…",
-                id="prompt",
+        with VerticalScroll(id="conversation"):
+            yield Vertical(id="message-list")
+        yield Static("", id="activity")
+        with Horizontal(id="input-area"):
+            yield Static("> ", id="input-prompt")
+            yield Input(placeholder="想让我做什么?", id="prompt")
+        with Horizontal(id="status-bar"):
+            yield Static("", id="status")
+            yield Static(
+                render.usage_bar_text(
+                    self.total_usage, self.context_tokens, self.context_limit
+                ),
+                id="usage",
             )
-            with Horizontal(id="status-bar"):
-                yield Static("就绪", id="status")
-                yield Static(
-                    render.usage_bar_text(self.total_usage, self.context_tokens),
-                    id="usage",
-                )
-        yield Footer()
 
     def on_mount(self) -> None:
         self._prompt.focus()
-        if self.session_id:
-            self.sub_title = f"Session {self.session_id}"
-        self.call_after_refresh(
-            self._render_history,
+        self._refresh_hints()
+        self._spinner_timer = self.set_interval(
+            0.125, self._tick_spinner, pause=True
         )
+        self.call_after_refresh(self._render_history)
 
     async def _render_history(self) -> None:
-        if not self.history:
-            await self._mount_view(render.WELCOME_VIEW)
-            return
-
+        await self._message_list.mount(
+            Static(
+                render.banner_text(self.model_name, self.workspace, self.session_id),
+                classes="banner",
+            )
+        )
         for record in self.history:
             for view in render.render_record(record):
                 await self._mount_view(view)
-
         self._scroll_to_bottom()
 
     @property
@@ -157,12 +330,16 @@ class ChatApp(App[None]):
         return self.query_one("#usage", Static)
 
     @property
+    def _activity(self) -> Static:
+        return self.query_one("#activity", Static)
+
+    @property
     def _message_list(self) -> Vertical:
         return self.query_one("#message-list", Vertical)
 
-    async def _mount_view(self, view: render.MessageView) -> Markdown:
-        """Mount one view; collapsible views start collapsed. Returns the
-        inner Markdown widget so streamed deltas can keep updating it."""
+    async def _mount_view(self, view: render.MessageView) -> Markdown | None:
+        """Mount one view. Returns the inner Markdown widget when the block
+        body is Markdown, so streamed deltas can keep updating it."""
         if view.collapsible_title:
             body = Markdown(view.markdown)
             await self._message_list.mount(
@@ -170,18 +347,41 @@ class ChatApp(App[None]):
                     body,
                     title=view.collapsible_title,
                     collapsed=True,
+                    collapsed_symbol=view.symbol or "▶",
+                    expanded_symbol=view.symbol or "▼",
                     classes=view.classes,
                 )
             )
             self._scroll_to_bottom()
             return body
-        return await self._mount_markdown(view.markdown, classes=view.classes)
-
-    async def _mount_markdown(self, content: str, *, classes: str = "") -> Markdown:
-        widget = Markdown(content, classes=classes)
-        await self._message_list.mount(widget)
+        if view.text:
+            # 原文块:经 rich.Text 挂载,杜绝用户/错误文本被当 markup 解析。
+            if view.symbol:
+                widget = Horizontal(
+                    Static(view.symbol, classes="gutter"),
+                    Static(Text(view.text), classes="body"),
+                    classes=f"row {view.classes}",
+                )
+            else:
+                widget = Static(Text(view.text), classes=f"line {view.classes}")
+            await self._message_list.mount(widget)
+            self._scroll_to_bottom()
+            return None
+        body = Markdown(view.markdown, classes="" if view.symbol else view.classes)
+        if view.symbol:
+            await self._message_list.mount(
+                Horizontal(
+                    Static(view.symbol, classes="gutter"),
+                    body,
+                    classes=f"row {view.classes}",
+                )
+            )
+        else:
+            if "plan" in view.classes.split():
+                body.border_title = "计划"
+            await self._message_list.mount(body)
         self._scroll_to_bottom()
-        return widget
+        return body
 
     async def _update_markdown(self, widget: Markdown, content: str) -> None:
         await widget.update(content)
@@ -206,9 +406,9 @@ class ChatApp(App[None]):
             if not user_input:
                 return
 
-        await self._mount_markdown(render.user_markdown(user_input))
+        await self._mount_view(render.user_view(user_input))
         self._prompt.disabled = True
-        self._status.update("请求中…")
+        self._begin_turn()
 
         reasoning_widget: Markdown | None = None
         answer_widget: Markdown | None = None
@@ -223,30 +423,28 @@ class ChatApp(App[None]):
                             render.reasoning_view("")
                         )
                     reasoning_text += chunk.thinking
-                    self._status.update("思考中…")
+                    self._set_verb("思考中")
                     await self._update_markdown(reasoning_widget, reasoning_text)
                 elif isinstance(chunk, TextDelta):
                     if answer_widget is None:
-                        answer_widget = await self._mount_markdown(
-                            render.answer_markdown("")
+                        answer_widget = await self._mount_view(
+                            render.answer_view("")
                         )
                     answer_text += chunk.text
-                    self._status.update("生成中…")
-                    await self._update_markdown(
-                        answer_widget,
-                        render.answer_markdown(answer_text),
-                    )
+                    self._set_verb("撰写回复")
+                    await self._update_markdown(answer_widget, answer_text)
                 elif isinstance(chunk, ToolCall):
                     # 后续轮次的思考/回答另起新块，保持与工具块的时间顺序。
                     reasoning_widget = None
                     answer_widget = None
                     reasoning_text = ""
                     answer_text = ""
-                    self._status.update(f"执行工具：{chunk.name}…")
+                    self._set_verb(f"运行 {chunk.name}")
                     await self._mount_view(
                         render.tool_call_view(chunk.name, chunk.input)
                     )
                 elif isinstance(chunk, ToolResult):
+                    self._set_verb("请求中")
                     await self._mount_view(
                         render.tool_output_view(
                             chunk.name,
@@ -259,19 +457,21 @@ class ChatApp(App[None]):
                     answer_widget = None
                     reasoning_text = ""
                     answer_text = ""
-                    self._status.update("上下文已压缩")
+                    self._set_verb("压缩上下文")
                     await self._mount_view(
                         render.compaction_view(chunk.dropped, chunk.summary)
                     )
                 elif isinstance(chunk, TurnEnd):
                     self._usage.update(
-                        render.usage_bar_text(chunk.usage, chunk.context_tokens)
+                        render.usage_bar_text(
+                            chunk.usage, chunk.context_tokens, self.context_limit
+                        )
                     )
         except Exception as exc:
-            await self._mount_markdown(render.error_markdown(exc))
+            await self._mount_view(render.error_view(exc))
         finally:
+            self._end_turn()
             self._prompt.disabled = False
-            self._status.update(self._ready_status())
             self._prompt.focus()
 
     async def _enter_plan_mode(self, command: str) -> str:
@@ -279,18 +479,49 @@ class ChatApp(App[None]):
         返回需要继续作为用户输入发送的剩余参数,可为空。"""
         plan_mode = getattr(self.chat, "plan_mode", None)
         if plan_mode is None:
-            await self._mount_markdown(render.error_markdown("当前后端不支持 plan 模式"))
+            await self._mount_view(render.error_view("当前后端不支持 plan 模式"))
             return ""
         plan_mode.enable()
         saver = getattr(self.chat, "save_state", None)
         if callable(saver):
             saver()  # 回合外的模式切换即时落盘,重启后仍处于 plan 模式
         await self._mount_view(render.PLAN_MODE_VIEW)
-        self._status.update(self._ready_status())
+        self._refresh_hints()
         return command[len("/plan"):].strip()
 
-    def _ready_status(self) -> str:
+    def _begin_turn(self) -> None:
+        self._turn_started = time.monotonic()
+        self._activity_verb = "请求中"
+        self._activity.add_class("running")
+        self._refresh_activity()
+        self._spinner_timer.resume()
+
+    def _end_turn(self) -> None:
+        self._spinner_timer.pause()
+        self._activity.remove_class("running")
+        self._activity.update("")
+        self._refresh_hints()
+
+    def _set_verb(self, verb: str) -> None:
+        if verb != self._activity_verb:
+            self._activity_verb = verb
+            self._refresh_activity()
+
+    def _tick_spinner(self) -> None:
+        self._spinner_tick += 1
+        self._refresh_activity()
+
+    def _refresh_activity(self) -> None:
+        self._activity.update(
+            render.spinner_text(
+                self._spinner_tick,
+                self._activity_verb,
+                time.monotonic() - self._turn_started,
+            )
+        )
+
+    def _refresh_hints(self) -> None:
         plan_mode = getattr(self.chat, "plan_mode", None)
-        if plan_mode is not None and plan_mode.active:
-            return "就绪 · PLAN 模式"
-        return "就绪"
+        self._status.update(
+            render.hint_text(plan_mode is not None and plan_mode.active)
+        )

@@ -27,7 +27,7 @@
 ## Reminders 与 plan 模式
 
 - `reminders.py` 是动态 system-reminder 层,与 `prompt_template` 的静态 provider 对称:`ReminderProvider` 协议(`provide() -> str | None`)每个用户回合被 `ConversationService` 轮询一次,结果经 `wy_core.Agent.run(reminders=...)` 注入本回合 user 消息尾部的 `<system-reminder>` 文本块——前缀(system prompt/工具/既有历史)不变以保前缀缓存,过期提示随早期历史被压缩摘要掉。新增"每回合可变状态提示"一律走这层,不改 system prompt。
-- plan 模式即第一个应用:`PlanModeState`(factory 构造并总是装配)激活期**每回合重复注入**约束提示(消息流尾部约束力弱于 system prompt,重复注入是刻意补偿),`disable()` 后下一回合一次性注入"已退出"提示。它同时是 `wy_core.StateExtension`(key=`plan_mode`):`active` 随状态快照持久化、恢复会话不丢模式,一次性退出提示是易失状态不持久化。`tools/plan.py` 的 `ExitPlanModeTool` 与 `SkillTool`/`MCPTool` 同型(模块只有类,不进 `DEFAULT_TOOLS`),持共享状态,模型提交 `plan`(Markdown)即翻转状态退出;在 factory 中与 `AgentTool` 一样于工具集快照**之后**追加——子 agent 不含也不可控制 plan 模式。TUI 在 `on_input_submitted` 本地拦截 `/plan [args]`(harness 状态切换,不发给模型;有 args 则开模式后把 args 作为用户输入继续发送),切换后即调 `save_state()` 落盘,状态栏就绪文案显示"PLAN 模式";`render.tool_call_view` 对 `exit_plan_mode` 的非空 plan 直接以 Markdown 展开展示(不折叠不围栏)。**当前 v1 无用户审批对话框、无工具硬拦截**(plan 模式下 edit/write/bash 仍可执行,仅靠提示约束),两者随后续工具权限层补充。
+- plan 模式即第一个应用:`PlanModeState`(factory 构造并总是装配)激活期**每回合重复注入**约束提示(消息流尾部约束力弱于 system prompt,重复注入是刻意补偿),`disable()` 后下一回合一次性注入"已退出"提示。它同时是 `wy_core.StateExtension`(key=`plan_mode`):`active` 随状态快照持久化、恢复会话不丢模式,一次性退出提示是易失状态不持久化。`tools/plan.py` 的 `ExitPlanModeTool` 与 `SkillTool`/`MCPTool` 同型(模块只有类,不进 `DEFAULT_TOOLS`),持共享状态,模型提交 `plan`(Markdown)即翻转状态退出;在 factory 中与 `AgentTool` 一样于工具集快照**之后**追加——子 agent 不含也不可控制 plan 模式。TUI 在 `on_input_submitted` 本地拦截 `/plan [args]`(harness 状态切换,不发给模型;有 args 则开模式后把 args 作为用户输入继续发送),切换后即调 `save_state()` 落盘,输入框下方提示行显示"⏸ plan 模式"标识;`render.tool_call_view` 对 `exit_plan_mode` 的非空 plan 直接以 Markdown 展开展示(不折叠不围栏)。**当前 v1 无用户审批对话框、无工具硬拦截**(plan 模式下 edit/write/bash 仍可执行,仅靠提示约束),两者随后续工具权限层补充。
 - 持久化保真:`SessionStore.append_user(content, reminders=...)` 把 reminders 存入 metadata(content 仍是原始输入,TUI 历史渲染不受影响),`conversation_messages()` 恢复时按 metadata 重建含 reminder 块的 user 消息,保证回灌历史与模型当时所见一致。
 
 ## Agent 状态管理
@@ -52,7 +52,7 @@
 
 ## TUI 展示层
 
-- `tui/` 是纯展示层：`render.py` 保持纯函数（`SessionRecord`/事件 → `MessageView` Markdown），新增展示逻辑放这里并配测试；`app.py` 只做界面组件与交互，不解析业务数据。TUI 只消费 `wy_core` 的 `AgentEvent` 事件与本包 `SessionRecord` 等公开数据类型，不触碰工具层。
-- 思考过程、工具调用/输出、上下文压缩块默认收起、点击标题展开（`MessageView.collapsible_title` 非空即收起块，Textual `Collapsible` 承载）；工具参数/输出做动态围栏与展示截断（30 行 / 2000 字符），会话文件始终保留完整内容。
-- 用量不进会话区，由输入框下方的用量条展示（`usage_bar_text`：输入/输出/缓存为累计值、上下文为最近一次请求的规模），在 `TurnEnd` 事件时刷新。
-- `main.py` 是唯一入口：argparse → `bootstrap(session_id)` → 启动 TUI → finally `close()`。
+- `tui/` 是纯展示层,界面仿照 Claude Code 的终端样式:`render.py` 保持纯函数(`SessionRecord`/事件 → `MessageView` 视图模型与 markup 字符串,不 import Textual),新增展示逻辑放这里并配测试(纯函数断言在 `test_render.py`,app 层组装/交互冒烟在 `test_tui_app.py`,headless `run_test` + 外层 `asyncio.run`,不引入 pytest-asyncio);`app.py` 只做界面组件与交互,不解析业务数据。TUI 只消费 `wy_core` 的 `AgentEvent` 事件与本包 `SessionRecord` 等公开数据类型,不触碰工具层。
+- 视图词汇(`MessageView` 三形态:折叠块 / 原文块 / Markdown 块,由字段组合决定):用户输入 `>` 沟槽 + 原文(经 rich.Text 挂载,不解析 Markdown/markup);助手回复 `⏺` 沟槽 + Markdown;工具调用 `⏺ name(入参摘要)` 一行(摘要按 `_SUMMARY_KEYS` 优先级取主参数,单行截 64 字符),完整入参默认收起;工具输出 `⎿ 首行预览 (+N 行)`,完整输出默认收起;思考 `✻`/压缩 `✽` 弱化折叠块;`exit_plan_mode` 的非空 plan 以橙色圆角边框内展开的 Markdown 展示。折叠块由重样式化的 Textual `Collapsible` 承载(symbol 即沟槽符,标题是 content markup——动态内容必须 `rich.markup.escape` 转义),点击标题展开;工具参数/输出做动态围栏与展示截断(30 行 / 2000 字符),会话文件始终保留完整内容。
+- 界面无 Header/Footer:启动横幅(`banner_text`:欢迎行 + 模型/目录/会话)挂在会话区顶部随内容滚动;回合进行中输入框上方显示动画活动行(`spinner_text`:`SPINNER_FRAMES` 动画符 + 动词 + 已耗时,`set_interval` 驱动);底部是圆角边框输入框(`>` 提示符,聚焦时边框变橙)与提示/用量行——左侧 `hint_text`(plan 模式显示 `⏸ plan 模式` 橙色标识),右侧 `usage_bar_text`(输入/输出/缓存为累计值、上下文为最近一次请求规模,数字 1.2k 式紧凑格式;`context_limit` 非 0 时附"距自动压缩 N%",取自 `ConversationService.context_limit` = Session 压缩阈值),在 `TurnEnd` 事件时刷新。调色板常量(品牌橙 `#D77757` 等)定义在 `render.py`,`app.py` 的 CSS 与其保持一致(CSS 无法引用 Python 常量)。
+- `main.py` 是唯一入口:argparse → `bootstrap(session_id)` → 启动 TUI(横幅信息经 `ConversationService.model_name`/`Path.cwd()` 传入)→ finally `close()`。当前无 esc 中断回合能力(取消语义涉及 bash 持久会话的孤儿线程并发,待权限/中断层统一设计,不要在 TUI 层直接 cancel worker)。

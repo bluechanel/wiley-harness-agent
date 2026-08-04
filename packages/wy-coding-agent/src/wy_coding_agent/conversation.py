@@ -56,6 +56,16 @@ class ConversationService:
         return self._store.session_id
 
     @property
+    def model_name(self) -> str:
+        """模型展示名(wy_core.Model.name),供 UI 横幅等展示。"""
+        return self._agent.model.name
+
+    @property
+    def context_limit(self) -> int:
+        """自动压缩阈值(tokens),供 UI 展示距压缩的余量。"""
+        return self._agent.session.max_context_tokens
+
+    @property
     def history(self) -> tuple[SessionRecord, ...]:
         return self._store.records
 

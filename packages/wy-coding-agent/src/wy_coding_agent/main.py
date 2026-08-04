@@ -2,6 +2,7 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
 from wy_core import ModelError
 
@@ -34,6 +35,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             history=agent.history,
             total_usage=agent.total_usage,
             context_tokens=agent.last_context_tokens,
+            model_name=agent.model_name,
+            workspace=str(Path.cwd()),
+            context_limit=agent.context_limit,
         ).run()
     finally:
         agent.close()
