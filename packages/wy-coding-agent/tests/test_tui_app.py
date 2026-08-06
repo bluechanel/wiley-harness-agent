@@ -23,6 +23,7 @@ class FakeBackend:
     def __init__(self, events=()):
         self._events = tuple(events)
         self.plan_mode = PlanModeState()
+        self.tool_hook = None
         self.saved = 0
         self.inputs: list[str] = []
 

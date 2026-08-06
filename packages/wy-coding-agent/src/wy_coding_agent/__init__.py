@@ -42,6 +42,7 @@ from wy_coding_agent.session import (
     SessionStore,
 )
 from wy_coding_agent.skills import Skill, default_skills_dirs, discover_skills
+from wy_coding_agent.tool_policy import ApprovalHandler, WorkspaceToolHook
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent_tool import AgentTool
 from wy_coding_agent.tools.plan import ExitPlanModeTool
@@ -51,6 +52,7 @@ __all__ = [
     "AgentMDProvider",
     "AgentTool",
     "AnthropicConfig",
+    "ApprovalHandler",
     "AnthropicModel",
     "BasePromptProvider",
     "CompactionConfig",
@@ -72,6 +74,7 @@ __all__ = [
     "SkillProvider",
     "SkillTool",
     "WorkspaceProvider",
+    "WorkspaceToolHook",
     "bootstrap",
     "build_prompt",
     "create_agent",

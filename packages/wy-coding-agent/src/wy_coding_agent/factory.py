@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from wy_core import Agent, AgentState, AuditLog, Model, Session, Tool
+from wy_core import Agent, AgentState, AuditLog, Model, Session, Tool, ToolHook
 
 from wy_coding_agent.anthropic import AnthropicModel
 from wy_coding_agent.config import (
@@ -28,6 +28,7 @@ from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent_tool import AgentTool
 from wy_coding_agent.tools.plan import ExitPlanModeTool
 from wy_coding_agent.tools.skill import SkillTool
+from wy_coding_agent.tool_policy import WorkspaceToolHook
 
 
 def bootstrap(
@@ -81,6 +82,7 @@ def create_agent(
     mcp_config: Path | None = None,
     skills_dirs: Sequence[Path] | None = None,
     audit: bool = True,
+    tool_hook: ToolHook | None = None,
 ) -> ConversationService:
     """Create an agent backed by a durable session.
 
@@ -162,6 +164,9 @@ def create_agent(
     if latest_state is not None:
         state.restore(dict(latest_state))
 
+    if tool_hook is None:
+        tool_hook = WorkspaceToolHook(workspace or Path.cwd())
+
     try:
         agent = Agent(
             model=model,
@@ -171,6 +176,7 @@ def create_agent(
             audit=(
                 AuditLog(store.path.with_suffix(".audit.jsonl")) if audit else None
             ),
+            tool_hook=tool_hook,
         )
     except BaseException:
         if mcp_manager is not None:

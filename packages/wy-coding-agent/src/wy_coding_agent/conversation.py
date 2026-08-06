@@ -9,6 +9,7 @@ from wy_core import (
     Compaction,
     ThinkingBlock,
     ToolCall,
+    ToolHook,
     ToolResult,
     TurnEnd,
     Usage,
@@ -39,6 +40,11 @@ class ConversationService:
         """plan 模式状态扩展;未装配(自定义组装)时为 None。"""
         extension = self._agent.state.get("plan_mode")
         return extension if isinstance(extension, PlanModeState) else None
+
+    @property
+    def tool_hook(self) -> ToolHook | None:
+        """当前装配的工具审批钩子;未装配时为 None。"""
+        return self._agent._tool_hook  # noqa: SLF001
 
     def save_state(self) -> None:
         """状态快照有变化即追加一条 state 记录(回合外的切换也可即时落盘)。"""

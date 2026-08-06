@@ -27,6 +27,7 @@ from wy_core import (
 
 from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionRecord
+from wy_coding_agent.tui.approval import TuiApprovalHandler
 import wy_coding_agent.tui.render as render
 
 
@@ -249,6 +250,66 @@ class ChatApp(App[None]):
         width: auto;
         color: #8A8A8A;
     }
+
+    /* ── 内联审批卡片 ────────────────────────────── */
+
+    #message-list > ApprovalWidget {
+        width: 1fr;
+        border: round #D77757;
+        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+
+    ApprovalWidget:focus {
+        border: round #D77757;
+    }
+
+    #approval-card {
+        width: 1fr;
+        padding: 0;
+    }
+
+    #approval-title {
+        width: 1fr;
+        text-align: center;
+        text-style: bold;
+        padding: 0 0 1 0;
+        color: $text;
+    }
+
+    #approval-tool {
+        width: 1fr;
+        padding: 1 0 0 0;
+        color: #4EBF71;
+    }
+
+    #approval-param {
+        width: 1fr;
+        padding: 0 0 0 2;
+        color: #9A9A9A;
+    }
+
+    #approval-sep {
+        width: 1fr;
+        height: 1;
+        color: #565656;
+    }
+
+    #approval-actions {
+        width: 1fr;
+        height: auto;
+        align: center middle;
+        padding: 0 0 1 0;
+    }
+
+    #approval-actions Button {
+        margin: 0 1;
+    }
+
+    #approval-accept {
+        background: #D77757;
+        color: $text;
+    }
     """
 
     TITLE = "Wy Coding Agent"
@@ -303,6 +364,10 @@ class ChatApp(App[None]):
         self._spinner_timer = self.set_interval(
             0.125, self._tick_spinner, pause=True
         )
+        # 将 TUI 审批交互注入到工具审批钩子（延迟绑定：Agent 先于 TUI 创建）
+        hook = self.chat.tool_hook
+        if hook is not None and hasattr(hook, "set_handler"):
+            hook.set_handler(TuiApprovalHandler(self))
         self.call_after_refresh(self._render_history)
 
     async def _render_history(self) -> None:
