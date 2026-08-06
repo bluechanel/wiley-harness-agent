@@ -12,7 +12,7 @@ from wy_core.message import Message, ToolResultBlock, ToolUseBlock, Usage, user_
 from wy_core.model import Model, ModelEnd, ModelError, TextDelta, ThinkingDelta
 from wy_core.session import Session
 from wy_core.state import AgentState
-from wy_core.tool import Tool, ToolCall, ToolResult
+from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult
 
 
 @dataclass
@@ -61,6 +61,7 @@ class Agent:
         state: AgentState | None = None,
         audit: AuditLog | None = _DEFAULT_AUDIT,
         max_iterations: int = 50,
+        tool_hook: ToolHook | None = None,
     ) -> None:
         self.model = model
         self.tools = {t.name: t for t in tools}
@@ -73,6 +74,7 @@ class Agent:
         self.session = self.state.session  # 兼容别名,与 state.session 恒为同一对象
         self.audit = AuditLog.default() if audit is _DEFAULT_AUDIT else audit
         self.max_iterations = max_iterations
+        self._tool_hook = tool_hook
         self._audit(
             "agent_start",
             {
@@ -177,6 +179,23 @@ class Agent:
 
     async def _execute(self, block: ToolUseBlock) -> tuple[str, bool]:
         """执行单个工具调用;任何失败都转为错误文本,不打断回合。"""
+        if self._tool_hook is not None:
+            call = ToolCall(id=block.id, name=block.name, input=block.input)
+            try:
+                decision = await self._tool_hook.approve(call)
+            except Exception as exc:
+                decision = ToolApproval(allowed=False, reason=str(exc))
+            self._audit(
+                "tool_approval",
+                {
+                    "id": block.id,
+                    "name": block.name,
+                    "allowed": decision.allowed,
+                    "reason": decision.reason,
+                },
+            )
+            if not decision.allowed:
+                return f"工具调用被拒绝: {decision.reason or '未说明原因'}", True
         tool = self.tools.get(block.name)
         if tool is None:
             return f"Error: unknown tool {block.name}", True

@@ -38,7 +38,7 @@ from wy_core.realtime_model import (
     UserTranscript,
     UserTranscriptDelta,
 )
-from wy_core.tool import Tool, ToolCall, ToolResult
+from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult
 
 
 @dataclass
@@ -117,6 +117,7 @@ class RealtimeAgent:
         echo_suppression: bool = True,
         audit: AuditLog | None = _DEFAULT_AUDIT,
         closer: Callable[[], None] | None = None,
+        tool_hook: ToolHook | None = None,
     ) -> None:
         self.model = model
         self.tools = {t.name: t for t in tools}
@@ -128,6 +129,7 @@ class RealtimeAgent:
         self.echo_suppression = echo_suppression
         self.audit = AuditLog.default() if audit is _DEFAULT_AUDIT else audit
         self._closer = closer
+        self._tool_hook = tool_hook
         self._is_responding = False
         self._current_response_id: str | None = None
         self._audio_suppressed = False
@@ -337,7 +339,7 @@ class RealtimeAgent:
                 "tool_call", {"id": call.call_id, "name": call.name, "input": call.arguments}
             )
             yield ToolCall(id=call.call_id, name=call.name, input=call.arguments)
-            content, is_error = await self._execute(call.name, call.arguments)
+            content, is_error = await self._execute(call.call_id, call.name, call.arguments)
             self._audit(
                 "tool_result",
                 {"id": call.call_id, "name": call.name, "content": content, "is_error": is_error},
@@ -347,11 +349,28 @@ class RealtimeAgent:
         await self._request_response()
         yield ToolResultsSubmitted(count=len(calls))
 
-    async def _execute(self, name: str, arguments: dict) -> tuple[str, bool]:
+    async def _execute(self, call_id: str, name: str, arguments: dict) -> tuple[str, bool]:
         """执行单个工具调用;语义对齐 ``Agent``:任何失败转错误文本。"""
         tool = self.tools.get(name)
         if tool is None:
             return f"Error: unknown tool {name}", True
+        if self._tool_hook is not None:
+            call = ToolCall(id=call_id, name=name, input=arguments)
+            try:
+                decision = await self._tool_hook.approve(call)
+            except Exception as exc:
+                decision = ToolApproval(allowed=False, reason=str(exc))
+            self._audit(
+                "tool_approval",
+                {
+                    "id": call_id,
+                    "name": name,
+                    "allowed": decision.allowed,
+                    "reason": decision.reason,
+                },
+            )
+            if not decision.allowed:
+                return f"工具调用被拒绝: {decision.reason or '未说明原因'}", True
         try:
             return await asyncio.to_thread(tool.execute, arguments), False
         except Exception as exc:  # 工具任意异常都不允许打断会话

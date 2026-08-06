@@ -183,6 +183,42 @@ class ReadFile(Tool):
 - 模型调用了不存在的工具名 → `Error: unknown tool <name>`，同样不中断；
 - `parameters` 的 JSON Schema 由你的 `Model` 实现映射到厂商字段（Anthropic 的 `input_schema`、OpenAI 的 `parameters`）。
 
+## 工具审批 Hook
+
+`ToolHook` 允许在工具执行前对每次调用进行审批（批准或拒绝），适用于实现用户确认对话框、权限策略等场景。`Agent` 与 `RealtimeAgent` 均支持。
+
+```python
+from wy_core import ToolApproval, ToolCall, ToolHook
+
+
+class MyApproval(ToolHook):
+    """弹对话框让用户确认每个工具调用。"""
+
+    async def approve(self, call: ToolCall) -> ToolApproval:
+        # call.id / call.name / call.input   —— 工具调用信息
+        # 返回 ToolApproval(allowed=True)       批准执行
+        # 返回 ToolApproval(allowed=False, reason="用户取消")  拒绝执行
+        ...
+```
+
+传给 Agent：
+
+```python
+agent = Agent(model=..., tools=[...], tool_hook=MyApproval())
+# 或 RealtimeAgent：
+agent = RealtimeAgent(model=..., tools=[...], tool_hook=MyApproval(), mic=..., speaker=...)
+```
+
+语义：
+
+- `approve` 为异步方法，实现方可做 I/O（弹对话框、查远程策略等）；
+- 批准 → 工具正常执行，与无 hook 时一致；
+- 拒绝 → 返回 `ToolResult(is_error=True, content="工具调用被拒绝: {reason}")` 给模型，回合不中断；
+- 审批钩子本身抛异常 → 视为否决（reason 为异常信息），不中断回合；
+- 不传 `tool_hook`（默认 `None`）时行为完全不变——零开销，向后兼容；
+- Agent 并发场景下 `approve` 可能被多个协程同时调用，实现方按需加锁；
+- 审批决定计入审计日志（kind=`tool_approval`）。
+
 ## Agent 循环与事件
 
 ```python
@@ -362,6 +398,7 @@ RealtimeAgent(
 | `Model` / `ModelError` / `ModelEvent` | 模型抽象契约、错误类型与流事件联合类型 |
 | `TextDelta` / `ThinkingDelta` / `ModelEnd` | 模型流事件 dataclass |
 | `Tool` | 工具抽象契约 |
+| `ToolApproval` / `ToolHook` | 工具审批结果与审批钩子抽象契约 |
 | `Session` | 内存态会话与自动压缩 |
 | `AgentState` / `StateExtension` | agent 状态容器与命名扩展契约（快照/恢复 + 生命周期钩子） |
 | `AuditLog` | JSONL 审计日志 |

@@ -74,7 +74,7 @@ from wy_core.realtime_model import (
 )
 from wy_core.session import Session
 from wy_core.state import AgentState, StateExtension
-from wy_core.tool import Tool, ToolCall, ToolResult
+from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult
 
 __all__ = [
     "Agent",
@@ -115,7 +115,9 @@ __all__ = [
     "ThinkingBlock",
     "ThinkingDelta",
     "Tool",
+    "ToolApproval",
     "ToolCall",
+    "ToolHook",
     "ToolResult",
     "ToolResultBlock",
     "ToolResultsSubmitted",

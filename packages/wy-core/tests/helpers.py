@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from wy_core import Agent, Block, Message, Model, ModelEnd, ModelEvent, TextBlock, Tool, Usage
+from wy_core import Agent, Block, Message, Model, ModelEnd, ModelEvent, TextBlock, Tool, ToolApproval, ToolCall, ToolHook, Usage
 
 
 def end_event(
@@ -64,3 +64,36 @@ def run_events(agent: Agent, prompt: str, **kwargs) -> list:
 
 def make_text_end(text: str, **kwargs) -> ModelEnd:
     return end_event(TextBlock(text), **kwargs)
+
+
+class AllowAllHook(ToolHook):
+    """测试用:批准所有工具调用。"""
+
+    async def approve(self, call: ToolCall) -> ToolApproval:
+        return ToolApproval(allowed=True, reason="ok")
+
+
+class DenyAllHook(ToolHook):
+    """测试用:拒绝所有工具调用。"""
+
+    async def approve(self, call: ToolCall) -> ToolApproval:
+        return ToolApproval(allowed=False, reason="测试拒绝")
+
+
+class DenyByNameHook(ToolHook):
+    """测试用:拒绝特定名称的工具调用。"""
+
+    def __init__(self, denied_names: set[str]) -> None:
+        self.denied_names = denied_names
+
+    async def approve(self, call: ToolCall) -> ToolApproval:
+        if call.name in self.denied_names:
+            return ToolApproval(allowed=False, reason=f"禁止调用 {call.name}")
+        return ToolApproval(allowed=True)
+
+
+class BoomHook(ToolHook):
+    """测试用:approve 总是抛异常。"""
+
+    async def approve(self, call: ToolCall) -> ToolApproval:
+        raise RuntimeError("审批服务挂了")
