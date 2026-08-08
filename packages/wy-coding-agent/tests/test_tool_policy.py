@@ -283,3 +283,50 @@ def test_agent_无hook时行为不变():
     events = _run_events(agent, "调用")
     assert [type(e) for e in events] == [ToolCall, ToolResult, TurnEnd]
     assert events[1].content == "abc" and not events[1].is_error
+
+
+# ── 记住选择（"不再询问"） ─────────────────────────────────
+
+
+def test_allow_always_后同一命令不再走审批():
+    handler = FakeApprovalHandler()
+    hook = WorkspaceToolHook(Path("/tmp"), handler=handler)
+    call = ToolCall(id="c1", name="bash", input={"command": "ls -la"})
+
+    assert hook.can_remember(call) is True
+    hook.allow_always(call)
+    result = _asyncio_run(hook.approve(call))
+    assert result.allowed is True
+    assert len(handler.calls) == 0  # 命中记忆，未打扰 handler
+
+
+def test_allow_always_不放宽到其他命令():
+    handler = FakeApprovalHandler()
+    hook = WorkspaceToolHook(Path("/tmp"), handler=handler)
+    hook.allow_always(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+
+    _asyncio_run(
+        hook.approve(ToolCall(id="c2", name="bash", input={"command": "ls -la"}))
+    )
+    assert len(handler.calls) == 1  # 命令不同，仍需审批
+
+
+def test_allow_always_按路径记住工作区外文件():
+    ws = Path(tempfile.mkdtemp())
+    outside = Path(tempfile.mkdtemp()) / "x.txt"
+    outside.write_text("hi")
+    handler = FakeApprovalHandler()
+    hook = WorkspaceToolHook(ws, handler=handler)
+    call = ToolCall(id="c1", name="write", input={"file_path": str(outside)})
+
+    hook.allow_always(call)
+    result = _asyncio_run(hook.approve(call))
+    assert result.allowed is True
+    assert len(handler.calls) == 0
+
+
+def test_can_remember_对无标识调用为假():
+    hook = WorkspaceToolHook(Path("/tmp"))
+    assert hook.can_remember(ToolCall(id="c1", name="bash", input={})) is False
+    assert hook.can_remember(ToolCall(id="c2", name="read", input={})) is False
+    assert hook.can_remember(ToolCall(id="c3", name="grep", input={"p": "x"})) is False

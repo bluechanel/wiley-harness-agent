@@ -1,150 +1,201 @@
-"""工具审批 TUI：内联审批卡片 + 审批交互桥接。
+"""工具审批：把一次工具调用翻译成一张选择卡片，再把选择翻译回裁决。
 
-``ApprovalWidget`` 是内联在会话流中的审批卡片,参考 Claude Code 审批样式:
-工具名醒目、参数摘要、[A]批准/[R]拒绝 快捷键。
+审批的"怎么问"全部交给通用组件 ``tui/choice.py``（内联单选卡片）；
+本模块只负责工具域的知识——动作标题（"Bash 命令"/"编辑文件"…）、
+入参预览（edit 走 ``-``/``+`` 差异着色）、确认问句与三个选项的措辞。
 
-``TuiApprovalHandler`` 实现 ``ApprovalHandler`` 协议,
-将审批请求桥接到内联 Widget——在 Agent 的 async 流内挂载卡片,
-通过 ``asyncio.Future`` 阻塞等待用户决定。不使用 ModalScreen,
-审批卡片直接出现在消息列表的工具调用与工具输出之间。
+``TuiApprovalHandler`` 实现 ``ApprovalHandler`` 协议：调
+``ChatApp.ask_choice`` 挂卡片、拿到 ``ApprovalOption`` 后转成
+``ToolApproval``。"不再询问"选项仅在底层 hook 支持时出现（鸭子类型探测
+``can_remember``/``allow_always``），展示层不硬依赖具体 hook 类型。
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from textual import on
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Static
-from textual.widget import Widget
+from rich.text import Text
 
 from wy_core import ToolApproval, ToolCall
 
 from wy_coding_agent.tool_policy import ApprovalHandler
+from wy_coding_agent.tui.choice import Choice
+from wy_coding_agent.tui.render import DIM, RED, TEXT
 
 if TYPE_CHECKING:
     from wy_coding_agent.tui.app import ChatApp
 
-_MAX_PARAM_CHARS = 500
+ADDED = "#4EBF71"  # 新增行，与 render.py 的 .tool-call 绿一致
 
-# ── 参数智能展示 ────────────────────────────────────────────
+_MAX_PREVIEW_LINES = 12
+_MAX_LINE_CHARS = 160
+_PATH_TOOLS = ("read", "write", "edit")
+_PATH_KEYS = ("file_path", "path")
 
-_BASH_KEYS = ("command",)
-_FILE_KEYS = ("file_path", "old_string", "new_string", "content", "path")
-
-
-def _smart_params(call: ToolCall) -> list[tuple[str, str]]:
-    """从 ToolCall.input 提取可读的参数摘要。"""
-    pairs: list[tuple[str, str]] = []
-    if call.name == "bash":
-        for k in _BASH_KEYS:
-            if k in call.input:
-                val = str(call.input[k])
-                pairs.append(("命令", val[:300]))
-    elif call.name in ("read", "write", "edit"):
-        for k in _FILE_KEYS:
-            if k in call.input:
-                val = str(call.input[k])
-                ellipsis = "…" if len(val) > 120 else ""
-                pairs.append(("文件" if k == "file_path" else k, val[:120] + ellipsis))
-    if not pairs:
-        raw = json.dumps(call.input, ensure_ascii=False, indent=2)
-        if len(raw) > _MAX_PARAM_CHARS:
-            raw = raw[:_MAX_PARAM_CHARS] + "\n…"
-        pairs.append(("参数", raw))
-    return pairs
+# 动作标题与确认问句：按工具名给出人话，未知工具回落到通用文案。
+_HEADINGS = {
+    "bash": "Bash 命令",
+    "read": "读取文件",
+    "write": "写入文件",
+    "edit": "编辑文件",
+}
+_QUESTIONS = {
+    "bash": "是否执行该命令？",
+    "read": "是否读取该文件？",
+    "write": "是否写入该文件？",
+    "edit": "是否应用该编辑？",
+}
+_REMEMBER_LABELS = {
+    "bash": "是，且本次会话不再询问该命令",
+    "read": "是，且本次会话不再询问该文件",
+    "write": "是，且本次会话不再询问该文件",
+    "edit": "是，且本次会话不再询问该文件",
+}
 
 
-# ── 内联审批卡片 ─────────────────────────────────────────────
+# ── 卡片文案 ────────────────────────────────────────────────
 
 
-class ApprovalWidget(Widget, can_focus=True):
-    """内联在会话流中的工具审批卡片。
+def heading(call: ToolCall) -> str:
+    return _HEADINGS.get(call.name, f"{call.name} 工具调用")
 
-    提供按钮点击与键盘快捷键两种交互方式：
-    - a / Enter → 批准
-    - r / Esc → 拒绝
 
-    通过 ``asyncio.Future`` 将用户决定传回 `TuiApprovalHandler`。
-    """
+def question(call: ToolCall) -> str:
+    return _QUESTIONS.get(call.name, "是否继续？")
 
-    BINDINGS = [
-        Binding("a", "approve", "批准", show=False),
-        Binding("r", "reject", "拒绝", show=False),
+
+def _clip(raw: str) -> list[str]:
+    """按行截断预览：单行超长截尾，超出行数折叠成一行提示。"""
+    lines = raw.splitlines() or ([raw] if raw else [])
+    clipped = [
+        line[:_MAX_LINE_CHARS] + ("…" if len(line) > _MAX_LINE_CHARS else "")
+        for line in lines[:_MAX_PREVIEW_LINES]
     ]
+    if len(lines) > _MAX_PREVIEW_LINES:
+        clipped.append(f"… 另有 {len(lines) - _MAX_PREVIEW_LINES} 行")
+    return clipped
 
-    def __init__(self, call: ToolCall, future: asyncio.Future) -> None:
-        self._call = call
-        self._future = future
-        super().__init__()
 
-    def compose(self) -> ComposeResult:
-        param_pairs = _smart_params(self._call)
-        with Vertical(id="approval-card"):
-            yield Static("🔧 工具审批", id="approval-title")
-            yield Static(f"工具\n  {self._call.name}", id="approval-tool")
-            for label, value in param_pairs:
-                yield Static(f"{label}\n  {value}", id="approval-param")
-            yield Static("", id="approval-sep")
-            with Horizontal(id="approval-actions"):
-                yield Button("A. 批准", id="approval-accept")
-                yield Button("R. 拒绝", id="approval-deny")
+def preview_text(call: ToolCall) -> Text:
+    """把工具入参渲染成卡片正文：统一缩进两格，edit 走 -/+ 差异着色。"""
+    body = Text()
 
-    def on_mount(self) -> None:
-        self.focus()
+    def emit(lines: list[str], style: str, prefix: str = "") -> None:
+        for line in lines:
+            body.append(f"  {prefix}{line}\n", style=style)
 
-    # ── 命令动作 ─────────────────────────────────────────
+    def done() -> Text:
+        body.rstrip()  # rich 原地裁剪尾部空行，返回值为 None
+        return body
 
-    def action_approve(self) -> None:
-        self._resolve(ToolApproval(allowed=True, reason="用户批准"))
+    if call.name == "bash":
+        emit(_clip(str(call.input.get("command", ""))), TEXT)
+        description = str(call.input.get("description", "")).strip()
+        if description:
+            emit(_clip(description), DIM)
+        return done()
 
-    def action_reject(self) -> None:
-        self._resolve(ToolApproval(allowed=False, reason="用户拒绝"))
+    if call.name in _PATH_TOOLS:
+        path = next((str(call.input[k]) for k in _PATH_KEYS if call.input.get(k)), "")
+        if path:
+            emit([path], TEXT)
+        old = str(call.input.get("old_string", ""))
+        new = str(call.input.get("new_string", ""))
+        content = str(call.input.get("content", ""))
+        if old or new:
+            body.append("\n")
+            emit(_clip(old), RED, prefix="- ")
+            emit(_clip(new), ADDED, prefix="+ ")
+        elif content:
+            body.append("\n")
+            emit(_clip(content), DIM)
+        return done()
 
-    # ── 按钮回调 ─────────────────────────────────────────
+    raw = (
+        json.dumps(call.input, ensure_ascii=False, indent=2)
+        if call.input
+        else "（无参数）"
+    )
+    emit(_clip(raw), DIM)
+    return done()
 
-    @on(Button.Pressed, "#approval-accept")
-    def _on_accept(self) -> None:
-        self.action_approve()
 
-    @on(Button.Pressed, "#approval-deny")
-    def _on_deny(self) -> None:
-        self.action_reject()
+# ── 选项 ───────────────────────────────────────────────────
 
-    # ── 内部 ─────────────────────────────────────────────
 
-    def _resolve(self, decision: ToolApproval) -> None:
-        if not self._future.done():
-            self._future.set_result(decision)
-        self.remove()
+@dataclass(frozen=True, slots=True)
+class ApprovalOption:
+    """一个审批选项的语义：裁决 + 是否要 hook 记住这次选择。"""
+
+    allowed: bool
+    reason: str
+    remember: bool = False
+
+
+def build_choices(
+    call: ToolCall, *, can_remember: bool
+) -> list[Choice[ApprovalOption]]:
+    """构造选项列表：是 /（可选）不再询问 / 否，末项恒为拒绝（Esc 命中）。"""
+    choices = [
+        Choice("是", ApprovalOption(allowed=True, reason="用户批准")),
+    ]
+    if can_remember:
+        choices.append(
+            Choice(
+                _REMEMBER_LABELS.get(call.name, "是，且本次会话不再询问"),
+                ApprovalOption(
+                    allowed=True,
+                    reason="用户批准（本次会话不再询问）",
+                    remember=True,
+                ),
+            )
+        )
+    choices.append(
+        Choice(
+            "否，并告诉我该怎么做 (esc)",
+            ApprovalOption(allowed=False, reason="用户拒绝"),
+        )
+    )
+    return choices
 
 
 # ── 审批交互桥接 ───────────────────────────────────────────
 
 
 class TuiApprovalHandler(ApprovalHandler):
-    """把审批请求桥接到内联 ``ApprovalWidget``。
+    """把审批请求翻译成一次 ``ChatApp.ask_choice``。
 
-    在 ``ChatApp.on_mount`` 中创建并注入到 ``WorkspaceToolHook``:
-    当 Agent 执行到需要审批的工具时,hook 调用 ``request_approval``,
-    本实现在消息列表尾部挂载 ``ApprovalWidget`` 卡片,
-    通过 ``asyncio.Future`` 阻塞等待用户决定。
+    在 ``ChatApp.on_mount`` 中创建并注入到 ``WorkspaceToolHook``：
+    当 Agent 执行到需要审批的工具时，hook 调用 ``request_approval``，
+    本实现挂出选择卡片并阻塞等待用户决定。
     """
 
     def __init__(self, app: ChatApp) -> None:
         self._app = app
 
     async def request_approval(self, call: ToolCall) -> ToolApproval:
-        loop = asyncio.get_event_loop()
-        future: asyncio.Future = loop.create_future()
-        widget = ApprovalWidget(call, future)
-        await self._app._message_list.mount(widget)
-        self._app._scroll_to_bottom()
+        remember = self._remember_callback(call)
         try:
-            return await future
+            option = await self._app.ask_choice(
+                heading=heading(call),
+                body=preview_text(call),
+                question=question(call),
+                choices=build_choices(call, can_remember=remember is not None),
+            )
         except Exception:
             return ToolApproval(allowed=False, reason="审批交互异常")
+        if option.remember and remember is not None:
+            remember(call)
+        return ToolApproval(allowed=option.allowed, reason=option.reason)
+
+    def _remember_callback(self, call: ToolCall) -> Callable[[ToolCall], None] | None:
+        """hook 支持记住该调用时返回回调，否则 None（不显示该选项）。"""
+        hook = getattr(self._app.chat, "tool_hook", None)
+        allow_always = getattr(hook, "allow_always", None)
+        can_remember = getattr(hook, "can_remember", None)
+        if not callable(allow_always) or not callable(can_remember):
+            return None
+        return allow_always if can_remember(call) else None

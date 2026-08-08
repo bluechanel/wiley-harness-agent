@@ -5,10 +5,13 @@
 提示/用量行。本层只做界面组件与交互;记录/事件到视图的解析在 render。
 """
 
+import asyncio
 import time
+from collections.abc import Sequence
 from typing import AsyncIterator, Protocol
 
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -28,6 +31,7 @@ from wy_core import (
 from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionRecord
 from wy_coding_agent.tui.approval import TuiApprovalHandler
+from wy_coding_agent.tui.choice import Choice, ChoiceWidget
 import wy_coding_agent.tui.render as render
 
 
@@ -251,64 +255,51 @@ class ChatApp(App[None]):
         color: #8A8A8A;
     }
 
-    /* ── 内联审批卡片 ────────────────────────────── */
+    /* ── 内联单选卡片(Claude Code 风格) ────────────────
+       圆角橙框内:标题 / 缩进正文预览 / 问句 / 编号选项列表。
+       通用组件,工具审批只是其使用方之一,故用 choice- 前缀。 */
 
-    #message-list > ApprovalWidget {
+    #message-list > ChoiceWidget {
         width: 1fr;
+        height: auto;
         border: round #D77757;
         padding: 0 1;
         margin: 0 0 1 0;
     }
 
-    ApprovalWidget:focus {
+    #message-list > ChoiceWidget:focus {
         border: round #D77757;
     }
 
-    #approval-card {
+    #choice-card {
         width: 1fr;
+        height: auto;
         padding: 0;
     }
 
-    #approval-title {
+    #choice-heading {
         width: 1fr;
-        text-align: center;
+        color: #DEDEDE;
         text-style: bold;
-        padding: 0 0 1 0;
-        color: $text;
     }
 
-    #approval-tool {
+    #choice-body {
         width: 1fr;
-        padding: 1 0 0 0;
-        color: #4EBF71;
+        padding: 1 0;
     }
 
-    #approval-param {
+    #choice-question {
         width: 1fr;
-        padding: 0 0 0 2;
-        color: #9A9A9A;
+        color: #DEDEDE;
     }
 
-    #approval-sep {
-        width: 1fr;
-        height: 1;
-        color: #565656;
-    }
-
-    #approval-actions {
+    #choice-options {
         width: 1fr;
         height: auto;
-        align: center middle;
-        padding: 0 0 1 0;
     }
 
-    #approval-actions Button {
-        margin: 0 1;
-    }
-
-    #approval-accept {
-        background: #D77757;
-        color: $text;
+    #choice-options > .choice-option {
+        width: 1fr;
     }
     """
 
@@ -452,6 +443,35 @@ class ChatApp(App[None]):
         await widget.update(content)
         self._scroll_to_bottom()
 
+    async def ask_choice[T](
+        self,
+        *,
+        question: str,
+        choices: Sequence[Choice[T]],
+        heading: str = "",
+        body: Text | str = "",
+        escape_index: int = -1,
+    ) -> T:
+        """在会话流里挂一张单选卡片，等用户选完并返回所选 ``Choice.value``。
+
+        任何"要用户当场选一下"的交互都走这里（工具审批是第一个使用方）。
+        必须在 worker 里 await——直接在消息处理器里等会堵死 App 消息泵，
+        卡片挂得出来却收不到按键，见 ``_run_turn``。
+        """
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        await self._message_list.mount(
+            ChoiceWidget(
+                future,
+                heading=heading,
+                body=body,
+                question=question,
+                choices=choices,
+                escape_index=escape_index,
+            )
+        )
+        self._scroll_to_bottom()
+        return await future
+
     def _scroll_to_bottom(self) -> None:
         self.query_one("#conversation", VerticalScroll).scroll_end(
             animate=False,
@@ -474,7 +494,14 @@ class ChatApp(App[None]):
         await self._mount_view(render.user_view(user_input))
         self._prompt.disabled = True
         self._begin_turn()
+        # 回合必须跑在 worker 里：审批卡片等交互要在回合**进行中**收键盘
+        # 事件，而事件派发走 App 的消息泵——直接在处理器里 await 整个
+        # 回合会把泵堵死，卡片挂得出来却按不动。
+        self._run_turn(user_input)
 
+    @work
+    async def _run_turn(self, user_input: str) -> None:
+        """跑完一个回合：消费事件流并落到界面。由 worker 驱动，不占消息泵。"""
         reasoning_widget: Markdown | None = None
         answer_widget: Markdown | None = None
         reasoning_text = ""

@@ -38,6 +38,8 @@ class WorkspaceToolHook(ToolHook):
 
     构造时注入 workspace；handler 可延迟注入（TUI 创建晚于 Agent）。
     handler 缺失时，需要审批的工具会被拒绝——无头模式自动降级。
+    用户选"不再询问"时经 ``allow_always`` 记住该调用（内存态、随进程消失），
+    命中记忆的调用不再打扰 handler。
     """
 
     _ALWAYS_APPROVE: frozenset[str] = frozenset({"bash"})
@@ -51,10 +53,36 @@ class WorkspaceToolHook(ToolHook):
     ) -> None:
         self._workspace = workspace.resolve()
         self._handler = handler
+        self._remembered: set[tuple[str, str]] = set()
 
     def set_handler(self, handler: ApprovalHandler | None) -> None:
         """注入审批交互实现（TUI 在 on_mount 时调用）。"""
         self._handler = handler
+
+    # ── 记住选择（会话内存态，不持久化） ───────────────────
+
+    def can_remember(self, call: ToolCall) -> bool:
+        """该调用是否可被"不再询问"记住（能算出稳定标识即可）。"""
+        return self._remember_key(call) is not None
+
+    def allow_always(self, call: ToolCall) -> None:
+        """记住这次批准：同标识的后续调用本进程内直接放行。"""
+        key = self._remember_key(call)
+        if key is not None:
+            self._remembered.add(key)
+
+    def _remember_key(self, call: ToolCall) -> tuple[str, str] | None:
+        """记忆标识：bash 认整条命令，路径工具认解析后的绝对路径。
+
+        刻意不做前缀/通配放宽——放行范围只覆盖用户当时看到的那次调用。
+        """
+        if call.name in self._ALWAYS_APPROVE:
+            command = str(call.input.get("command", "")).strip()
+            return (call.name, command) if command else None
+        if call.name in self._PATH_GATED:
+            path = self._resolve_tool_path(call)
+            return (call.name, str(path)) if path is not None else None
+        return None
 
     # ── ToolHook 接口 ──────────────────────────────────────
 
@@ -63,6 +91,9 @@ class WorkspaceToolHook(ToolHook):
         if decision is not None:
             return decision
         # 策略返回 None 表示"需要审批"
+        key = self._remember_key(call)
+        if key is not None and key in self._remembered:
+            return ToolApproval(allowed=True, reason="本次会话已批准")
         if self._handler is not None:
             return await self._handler.request_approval(call)
         return ToolApproval(
