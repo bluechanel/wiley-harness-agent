@@ -6,7 +6,9 @@ Capabilities ported from the reference: old_string uniqueness with
 preservation, and the reference's error messages so the model can self-correct.
 """
 
-from wy_core import Tool
+from pathlib import Path
+
+from wy_core import ApprovalRequest, Tool
 
 from wy_coding_agent.tools.files import (
     FileToolError,
@@ -64,6 +66,35 @@ class EditTool(Tool):
         "required": ["file_path", "old_string", "new_string"],
         "additionalProperties": False,
     }
+
+    def approve(self, input: dict, workspace: Path) -> ApprovalRequest | None:
+        """工作区内文件直接放行，工作区外需审批。展示 diff 字段。"""
+        path = self._resolve_for_approval(input.get("file_path"))
+        if path is not None and path.is_relative_to(workspace):
+            return None  # 工作区内直接放行
+        display = str(path) if path else str(input.get("file_path", "(未知)"))
+        fields: list[tuple[str, str]] = [("文件", display)]
+        old = str(input.get("old_string", ""))
+        new = str(input.get("new_string", ""))
+        if old:
+            fields.append(("删除", old[:200]))
+        if new:
+            fields.append(("新增", new[:200]))
+        return ApprovalRequest(
+            heading="编辑文件",
+            question="是否应用该编辑？",
+            fields=fields,
+            key=f"edit:{path}" if path else None,
+        )
+
+    def _resolve_for_approval(self, raw: object) -> Path | None:
+        """从 raw input 中提取路径并规范化为绝对路径，失败返回 None。"""
+        if not raw:
+            return None
+        try:
+            return resolve_path(raw).resolve()
+        except FileToolError:
+            return None
 
     def execute(self, input: dict) -> str:
         path = resolve_path(input.get("file_path"))

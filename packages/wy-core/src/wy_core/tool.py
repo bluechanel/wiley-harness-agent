@@ -4,10 +4,30 @@
 ``ToolResult`` 是两类 agent(回合式 ``Agent`` 与实时 ``RealtimeAgent``)
 共用的工具执行事件;``ToolHook`` 是工具审批抽象——Agent 与 RealtimeAgent
 在执行工具前调用 ``approve``,可批准或拒绝调用。
+
+``ApprovalRequest`` 是 ``Tool.approve()`` 的返回值:None 表示直接放行,
+返回本对象则表示需要用户审批,同时携带审批 UI 所需的展示信息与"不再询问"
+记忆标识。
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass
+class ApprovalRequest:
+    """``Tool.approve()`` 的返回值:需要审批时返回本对象,放行时返回 None。
+
+    ``heading``/``question`` 供 UI 渲染审批卡片;``fields`` 是展示给用户的
+    参数列表 ``[(标签, 值), ...]``;``key`` 为"本次会话不再询问"的稳定
+    记忆标识(None 表示不可记忆)。
+    """
+
+    heading: str
+    question: str
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    key: str | None = None
 
 
 class Tool(ABC):
@@ -20,6 +40,8 @@ class Tool(ABC):
       执行,不会冻结事件循环);失败直接 raise,由 Agent 统一转
       ``Error: ...`` 的 tool_result(is_error=True)返回给模型,
       不中断回合。
+    - ``approve`` 为审批入口:默认返回 None(放行);需要审批的工具覆写
+      本方法,返回 ``ApprovalRequest`` 携带展示信息与记忆标识。
     """
 
     name: str
@@ -29,6 +51,14 @@ class Tool(ABC):
     @abstractmethod
     def execute(self, input: dict) -> str:
         """执行工具,返回给模型看的文本结果。"""
+
+    def approve(self, input: dict, workspace: Path) -> ApprovalRequest | None:
+        """审批检查。返回 None 直接放行;返回 ApprovalRequest 进入审批流程。
+
+        ``workspace`` 为当前工作区路径,路径相关工具用它判断工作区内/外;
+        其余工具忽略即可。
+        """
+        return None
 
 
 @dataclass

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from wy_core import (
     Agent,
+    ApprovalRequest,
     Message,
     Model,
     ModelEnd,
@@ -21,6 +22,10 @@ from wy_core import (
 )
 
 from wy_coding_agent.tool_policy import ApprovalHandler, WorkspaceToolHook
+from wy_coding_agent.tools.bash import BashTool
+from wy_coding_agent.tools.edit import EditTool
+from wy_coding_agent.tools.read import ReadTool
+from wy_coding_agent.tools.write import WriteTool
 
 
 # ── 测试辅助 ────────────────────────────────────────────────
@@ -76,13 +81,42 @@ class FakeApprovalHandler(ApprovalHandler):
 
     def __init__(self, decision: ToolApproval | None = None):
         self.calls: list[ToolCall] = []
+        self.requests: list[ApprovalRequest] = []
         self._decision = decision
 
-    async def request_approval(self, call: ToolCall) -> ToolApproval:
+    async def request_approval(
+        self, call: ToolCall, request: ApprovalRequest
+    ) -> ToolApproval:
         self.calls.append(call)
+        self.requests.append(request)
         if self._decision is not None:
             return self._decision
         return ToolApproval(allowed=True, reason="测试通过")
+
+
+# ── 工具实例 ────────────────────────────────────────────────
+
+_BASH = BashTool()
+_READ = ReadTool()
+_WRITE = WriteTool()
+_EDIT = EditTool()
+_ECHO = _EchoTool()
+
+_STANDARD_TOOLS = {
+    "bash": _BASH,
+    "read": _READ,
+    "write": _WRITE,
+    "edit": _EDIT,
+    "echo": _ECHO,
+}
+
+
+def _hook(workspace=None, tools=None, handler=None):
+    return WorkspaceToolHook(
+        workspace or Path("/tmp"),
+        tools=tools or _STANDARD_TOOLS,
+        handler=handler,
+    )
 
 
 # ── 策略:无需审批直接放行 ──────────────────────────────────
@@ -93,7 +127,7 @@ def test_工作区内文件直接放行():
     f = ws / "foo.py"
     f.write_text("hello")
     handler = FakeApprovalHandler()
-    hook = WorkspaceToolHook(ws, handler=handler)
+    hook = _hook(ws, handler=handler)
 
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="read", input={"file_path": str(f)}))
@@ -103,19 +137,27 @@ def test_工作区内文件直接放行():
 
 
 def test_其他工具默认放行():
-    hook = WorkspaceToolHook(Path("/tmp"), handler=FakeApprovalHandler())
-    for name in ("glob", "grep", "agent", "skill", "exit_plan_mode", "mcp__srv__tool"):
-        result = _asyncio_run(
-            hook.approve(ToolCall(id="x", name=name, input={}))
-        )
-        assert result.allowed is True, f"{name} 应该放行"
+    """未覆写 approve() 的工具（默认返回 None）直接放行。"""
+    hook = _hook(handler=FakeApprovalHandler())
+    # echo 在 _STANDARD_TOOLS 中，_EchoTool 未覆写 approve() → 放行
+    result = _asyncio_run(
+        hook.approve(ToolCall(id="x", name="echo", input={"text": "hi"}))
+    )
+    assert result.allowed is True
+
+    # 未知工具（不在 tools dict 中）→ 拒绝
+    result = _asyncio_run(
+        hook.approve(ToolCall(id="x", name="unknown_tool", input={}))
+    )
+    assert result.allowed is False
+    assert "未知工具" in result.reason
 
 
 # ── 策略:需要审批 ──────────────────────────────────────────
 
 
 def test_bash_无handler时拒绝():
-    hook = WorkspaceToolHook(Path("/tmp"))
+    hook = _hook()
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
     )
@@ -127,17 +169,21 @@ def test_bash_有handler时委托():
     handler = FakeApprovalHandler(
         decision=ToolApproval(allowed=True, reason="ok")
     )
-    hook = WorkspaceToolHook(Path("/tmp"), handler=handler)
+    hook = _hook(handler=handler)
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
     )
     assert result.allowed is True
     assert len(handler.calls) == 1
     assert handler.calls[0].name == "bash"
+    # 验证 ApprovalRequest 被正确传递
+    assert len(handler.requests) == 1
+    assert handler.requests[0].heading == "Bash 命令"
+    assert handler.requests[0].key == "bash:ls"
 
 
 def test_read_工作区外文件_无handler时拒绝():
-    hook = WorkspaceToolHook(Path("/tmp/ws"))
+    hook = _hook(workspace=Path("/tmp/ws"))
     result = _asyncio_run(
         hook.approve(
             ToolCall(id="c1", name="read", input={"file_path": "/etc/passwd"})
@@ -148,7 +194,7 @@ def test_read_工作区外文件_无handler时拒绝():
 
 def test_write_工作区外文件_有handler时委托():
     handler = FakeApprovalHandler()
-    hook = WorkspaceToolHook(Path("/tmp/ws"), handler=handler)
+    hook = _hook(workspace=Path("/tmp/ws"), handler=handler)
     result = _asyncio_run(
         hook.approve(
             ToolCall(id="c1", name="write", input={"file_path": "/etc/foo"})
@@ -163,7 +209,7 @@ def test_write_工作区外文件_有handler时委托():
 
 
 def test_文件路径缺失时需审批():
-    hook = WorkspaceToolHook(Path("/tmp/ws"))
+    hook = _hook(workspace=Path("/tmp/ws"))
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="edit", input={"other": "val"}))
     )
@@ -171,7 +217,7 @@ def test_文件路径缺失时需审批():
 
 
 def test_空文件路径时需审批():
-    hook = WorkspaceToolHook(Path("/tmp/ws"))
+    hook = _hook(workspace=Path("/tmp/ws"))
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="read", input={"file_path": ""}))
     )
@@ -184,7 +230,7 @@ def test_相对路径支持():
     ws = Path(tempfile.mkdtemp())
     f = ws / "bar.txt"
     f.write_text("ok")
-    hook = WorkspaceToolHook(ws, handler=FakeApprovalHandler())
+    hook = _hook(ws, handler=FakeApprovalHandler())
     rel = os.path.relpath(str(f), str(Path.cwd()))
     result = _asyncio_run(
         hook.approve(ToolCall(id="c1", name="read", input={"file_path": rel}))
@@ -196,21 +242,27 @@ def test_相对路径支持():
 
 
 def test_set_handler_替换handler():
-    hook = WorkspaceToolHook(Path("/tmp"))
+    hook = _hook()
     # 无 handler → bash 被拒
-    r1 = _asyncio_run(hook.approve(ToolCall(id="c1", name="bash", input={})))
+    r1 = _asyncio_run(
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+    )
     assert r1.allowed is False
 
     # 注入 handler → bash 被批准
     handler = FakeApprovalHandler()
     hook.set_handler(handler)
-    r2 = _asyncio_run(hook.approve(ToolCall(id="c1", name="bash", input={})))
+    r2 = _asyncio_run(
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+    )
     assert r2.allowed is True
     assert len(handler.calls) == 1
 
     # 移除 handler → bash 又被拒
     hook.set_handler(None)
-    r3 = _asyncio_run(hook.approve(ToolCall(id="c1", name="bash", input={})))
+    r3 = _asyncio_run(
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+    )
     assert r3.allowed is False
 
 
@@ -222,7 +274,7 @@ def test_agent_bash被审批拒绝():
         [
             [
                 _end_event(
-                    ToolUseBlock(id="t1", name="bash", input={}),
+                    ToolUseBlock(id="t1", name="bash", input={"command": "rm -rf /"}),
                     stop_reason="tool_use",
                 )
             ],
@@ -231,8 +283,8 @@ def test_agent_bash被审批拒绝():
     )
     agent = Agent(
         model=model,
-        tools=[_EchoTool()],
-        tool_hook=WorkspaceToolHook(Path("/tmp")),
+        tools=[_BASH],
+        tool_hook=_hook(),
         audit=None,
     )
     events = _run_events(agent, "运行 bash")
@@ -259,8 +311,8 @@ def test_agent_read工作区内文件放行():
     )
     agent = Agent(
         model=model,
-        tools=[_EchoTool()],
-        tool_hook=WorkspaceToolHook(ws, handler=FakeApprovalHandler()),
+        tools=[_ECHO],
+        tool_hook=_hook(workspace=ws, tools={"echo": _ECHO}),
         audit=None,
     )
     events = _run_events(agent, "读文件")
@@ -279,7 +331,7 @@ def test_agent_无hook时行为不变():
             [_text_end("完成")],
         ]
     )
-    agent = Agent(model=model, tools=[_EchoTool()], audit=None)
+    agent = Agent(model=model, tools=[_ECHO], audit=None)
     events = _run_events(agent, "调用")
     assert [type(e) for e in events] == [ToolCall, ToolResult, TurnEnd]
     assert events[1].content == "abc" and not events[1].is_error
@@ -290,7 +342,7 @@ def test_agent_无hook时行为不变():
 
 def test_allow_always_后同一命令不再走审批():
     handler = FakeApprovalHandler()
-    hook = WorkspaceToolHook(Path("/tmp"), handler=handler)
+    hook = _hook(handler=handler)
     call = ToolCall(id="c1", name="bash", input={"command": "ls -la"})
 
     assert hook.can_remember(call) is True
@@ -302,8 +354,10 @@ def test_allow_always_后同一命令不再走审批():
 
 def test_allow_always_不放宽到其他命令():
     handler = FakeApprovalHandler()
-    hook = WorkspaceToolHook(Path("/tmp"), handler=handler)
-    hook.allow_always(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+    hook = _hook(handler=handler)
+    hook.allow_always(
+        ToolCall(id="c1", name="bash", input={"command": "ls"})
+    )
 
     _asyncio_run(
         hook.approve(ToolCall(id="c2", name="bash", input={"command": "ls -la"}))
@@ -316,7 +370,7 @@ def test_allow_always_按路径记住工作区外文件():
     outside = Path(tempfile.mkdtemp()) / "x.txt"
     outside.write_text("hi")
     handler = FakeApprovalHandler()
-    hook = WorkspaceToolHook(ws, handler=handler)
+    hook = _hook(ws, handler=handler)
     call = ToolCall(id="c1", name="write", input={"file_path": str(outside)})
 
     hook.allow_always(call)
@@ -326,7 +380,14 @@ def test_allow_always_按路径记住工作区外文件():
 
 
 def test_can_remember_对无标识调用为假():
-    hook = WorkspaceToolHook(Path("/tmp"))
-    assert hook.can_remember(ToolCall(id="c1", name="bash", input={})) is False
-    assert hook.can_remember(ToolCall(id="c2", name="read", input={})) is False
-    assert hook.can_remember(ToolCall(id="c3", name="grep", input={"p": "x"})) is False
+    hook = _hook()
+    assert (
+        hook.can_remember(ToolCall(id="c1", name="bash", input={})) is False
+    )
+    assert (
+        hook.can_remember(ToolCall(id="c2", name="read", input={})) is False
+    )
+    assert (
+        hook.can_remember(ToolCall(id="c3", name="grep", input={"p": "x"}))
+        is False
+    )

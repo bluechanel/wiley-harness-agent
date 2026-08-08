@@ -5,7 +5,9 @@ Content is written exactly as provided — line endings in ``content`` are
 intentional and are not rewritten. Parent directories are created as needed.
 """
 
-from wy_core import Tool
+from pathlib import Path
+
+from wy_core import ApprovalRequest, Tool
 
 from wy_coding_agent.tools.files import FileToolError, resolve_path
 
@@ -34,6 +36,28 @@ class WriteTool(Tool):
         "required": ["file_path", "content"],
         "additionalProperties": False,
     }
+
+    def approve(self, input: dict, workspace: Path) -> ApprovalRequest | None:
+        """工作区内文件直接放行，工作区外需审批。"""
+        path = self._resolve_for_approval(input.get("file_path"))
+        if path is not None and path.is_relative_to(workspace):
+            return None  # 工作区内直接放行
+        display = str(path) if path else str(input.get("file_path", "(未知)"))
+        return ApprovalRequest(
+            heading="写入文件",
+            question="是否写入该文件？",
+            fields=[("文件", display)],
+            key=f"write:{path}" if path else None,
+        )
+
+    def _resolve_for_approval(self, raw: object) -> Path | None:
+        """从 raw input 中提取路径并规范化为绝对路径，失败返回 None。"""
+        if not raw:
+            return None
+        try:
+            return resolve_path(raw).resolve()
+        except FileToolError:
+            return None
 
     def execute(self, input: dict) -> str:
         path = resolve_path(input.get("file_path"))

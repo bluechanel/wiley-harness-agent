@@ -53,7 +53,7 @@ async def _mount(app, **kwargs):
 
 
 def _drive(keys, **kwargs):
-    """挂卡片 → 依次按键 → 返回 future 结果。"""
+    """挂卡片 → 依次按键 → 返回 (value, text) 元组。"""
 
     async def go():
         app = ChatApp(FakeBackend(), session_id="s")
@@ -62,41 +62,49 @@ def _drive(keys, **kwargs):
             await _wait_until(pilot, lambda: widget.has_focus)
             for key in keys:
                 await pilot.press(key)
-            return await asyncio.wait_for(future, timeout=_TIMEOUT_SECONDS)
+            result = await asyncio.wait_for(future, timeout=_TIMEOUT_SECONDS)
+            return result.value, result.text
 
     return asyncio.run(go())
+
+
+def _drive_value(keys, **kwargs):
+    """_drive 的便捷包装：只取 value。"""
+    return _drive(keys, **kwargs)[0]
 
 
 # ── 键盘交互 ────────────────────────────────────────────────
 
 
 def test_enter_selects_first_choice() -> None:
-    assert _drive(["enter"]) == 1
+    assert _drive_value(["enter"]) == 1
 
 
 def test_down_then_enter_selects_second() -> None:
-    assert _drive(["down", "enter"]) == 2
+    assert _drive_value(["down", "enter"]) == 2
 
 
 def test_up_wraps_to_last() -> None:
-    assert _drive(["up", "enter"]) == 3
+    assert _drive_value(["up", "enter"]) == 3
 
 
 def test_number_key_selects_directly() -> None:
-    assert _drive(["3"]) == 3
+    assert _drive_value(["3"]) == 3
 
 
 def test_out_of_range_number_ignored() -> None:
     """越界数字键不应触发任何选择，后续 Enter 仍命中光标处。"""
-    assert _drive(["9", "enter"]) == 1
+    assert _drive_value(["9", "enter"]) == 1
 
 
 def test_escape_hits_last_choice_by_default() -> None:
-    assert _drive(["escape"]) == 3
+    value, text = _drive(["escape"])
+    assert value == 3
+    assert text == ""  # escape 不附带文本
 
 
 def test_escape_index_is_configurable() -> None:
-    assert _drive(["escape"], escape_index=0) == 1
+    assert _drive_value(["escape"], escape_index=0) == 1
 
 
 # ── 渲染 ────────────────────────────────────────────────────
@@ -181,7 +189,7 @@ def test_empty_choices_rejected() -> None:
 
 
 def test_ask_choice_returns_selected_value() -> None:
-    """``ChatApp.ask_choice`` 是对外入口：返回所选 Choice.value。"""
+    """``ChatApp.ask_choice`` 是对外入口：返回 ``ChoiceResult``。"""
 
     async def go():
         app = ChatApp(FakeBackend(), session_id="s")
@@ -193,4 +201,6 @@ def test_ask_choice_returns_selected_value() -> None:
             await pilot.press("2")
             return await asyncio.wait_for(task, timeout=_TIMEOUT_SECONDS)
 
-    assert asyncio.run(go()) == 2
+    result = asyncio.run(go())
+    assert result.value == 2
+    assert result.text == ""

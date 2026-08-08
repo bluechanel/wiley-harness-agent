@@ -74,13 +74,14 @@ from wy_core.realtime_model import (
 )
 from wy_core.session import Session
 from wy_core.state import AgentState, StateExtension
-from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult
+from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult, ApprovalRequest
 
 __all__ = [
     "Agent",
     "AgentError",
     "AgentEvent",
     "AgentState",
+    "ApprovalRequest",
     "AssistantTranscript",
     "AssistantTranscriptDelta",
     "AudioDelta",

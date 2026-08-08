@@ -165,7 +165,10 @@ def create_agent(
         state.restore(dict(latest_state))
 
     if tool_hook is None:
-        tool_hook = WorkspaceToolHook(workspace or Path.cwd())
+        tool_hook = WorkspaceToolHook(
+            workspace or Path.cwd(),
+            tools={t.name: t for t in all_tools},
+        )
 
     try:
         agent = Agent(

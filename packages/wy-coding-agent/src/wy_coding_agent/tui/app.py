@@ -31,7 +31,7 @@ from wy_core import (
 from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionRecord
 from wy_coding_agent.tui.approval import TuiApprovalHandler
-from wy_coding_agent.tui.choice import Choice, ChoiceWidget
+from wy_coding_agent.tui.choice import Choice, ChoiceResult, ChoiceWidget
 import wy_coding_agent.tui.render as render
 
 
@@ -301,6 +301,11 @@ class ChatApp(App[None]):
     #choice-options > .choice-option {
         width: 1fr;
     }
+
+    #choice-input {
+        width: 1fr;
+        margin: 0;
+    }
     """
 
     TITLE = "Wy Coding Agent"
@@ -451,8 +456,8 @@ class ChatApp(App[None]):
         heading: str = "",
         body: Text | str = "",
         escape_index: int = -1,
-    ) -> T:
-        """在会话流里挂一张单选卡片，等用户选完并返回所选 ``Choice.value``。
+    ) -> ChoiceResult[T]:
+        """在会话流里挂一张单选卡片，等用户选完并返回 ``ChoiceResult``。
 
         任何"要用户当场选一下"的交互都走这里（工具审批是第一个使用方）。
         必须在 worker 里 await——直接在消息处理器里等会堵死 App 消息泵，

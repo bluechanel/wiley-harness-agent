@@ -18,8 +18,9 @@ import shlex
 import signal
 import subprocess
 import uuid
+from pathlib import Path
 
-from wy_core import Tool
+from wy_core import ApprovalRequest, Tool
 
 _log = logging.getLogger(__name__)
 
@@ -151,6 +152,22 @@ class BashTool(Tool):
 
     def __init__(self) -> None:
         self._session: BashSession | None = None
+
+    def approve(self, input: dict, workspace: Path) -> ApprovalRequest | None:
+        """任何命令都需要用户审批。"""
+        cmd = str(input.get("command", "")).strip()
+        if not cmd:
+            return None  # 空命令不执行，也无需审批
+        fields: list[tuple[str, str]] = [("命令", cmd)]
+        desc = str(input.get("description", "")).strip()
+        if desc:
+            fields.append(("说明", desc))
+        return ApprovalRequest(
+            heading="Bash 命令",
+            question="是否执行该命令？",
+            fields=fields,
+            key=f"bash:{cmd}",
+        )
 
     def _reset_session(self) -> None:
         if self._session is not None:
