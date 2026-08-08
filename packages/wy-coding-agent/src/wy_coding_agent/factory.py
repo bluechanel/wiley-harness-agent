@@ -25,9 +25,9 @@ from wy_coding_agent.reminders import PlanModeState
 from wy_coding_agent.session import SessionStore
 from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
-from wy_coding_agent.tools.agent_tool import AgentTool
+from wy_coding_agent.tools.agent import AgentTool
 from wy_coding_agent.tools.plan import ExitPlanModeTool
-from wy_coding_agent.tools.skill import SkillTool
+from wy_coding_agent.skills import SkillTool
 from wy_coding_agent.tool_policy import WorkspaceToolHook
 
 
@@ -92,7 +92,7 @@ def create_agent(
     宿主按 `wy_core.Model` 契约实现后注入，厂商参数在构造期给定。
     tools 按 `wy_core.Tool` 契约编写后传入，省略时无本地工具（仅配置的
     MCP 工具可用）；名为 `agent` 的子 agent 派生工具总是额外装配（复用
-    同一 model 与既有工具集，见 `tools/agent_tool.py`），`exit_plan_mode`
+    同一 model 与既有工具集，见 `tools/agent.py`），`exit_plan_mode`
     工具与 plan 模式状态同样总是装配（`/plan` 交互见 TUI；约束提示经
     reminders 层逐回合注入，返回值的 `plan_mode` 属性供宿主切换）。prompt_providers
     省略时使用

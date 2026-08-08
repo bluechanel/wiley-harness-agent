@@ -8,7 +8,7 @@ import pytest
 from wy_core import ModelError, TextBlock, ToolResult, ToolUseBlock
 
 from wy_coding_agent import create_agent
-from wy_coding_agent.tools.agent_tool import AgentTool
+from wy_coding_agent.tools.agent import AgentTool
 
 from app_helpers import EchoTool, FakeModel, drain, end_event, make_text_end
 

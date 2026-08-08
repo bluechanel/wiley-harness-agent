@@ -11,7 +11,7 @@ from wy_coding_agent.skills import (
     parse_frontmatter,
     render_skill,
 )
-from wy_coding_agent.tools.skill import SkillTool
+from wy_coding_agent.skills import SkillTool
 
 
 def make_skill(base: Path, name: str, text: str) -> Path:

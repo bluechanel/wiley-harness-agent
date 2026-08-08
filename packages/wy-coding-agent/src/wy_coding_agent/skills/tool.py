@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from wy_core import Tool
 
-from wy_coding_agent.skills import Skill, render_skill
+from wy_coding_agent.skills.discovery import Skill, render_skill
 
 
 class SkillTool(Tool):

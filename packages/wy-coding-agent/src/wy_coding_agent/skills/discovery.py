@@ -4,7 +4,7 @@
 每个 skill 是一个含 ``SKILL.md`` 的目录(frontmatter 元数据 + 正文指令 +
 任意随包文件),按三级渐进披露进入上下文——系统提示只列 name+description
 (L1,`prompt_template.SkillProvider`),模型经 ``skill`` 工具加载正文
-(L2,`tools/skill.py`),随包文件由模型用 read/glob/bash 工具按需取用
+(L2,`skills/tool.py`),随包文件由模型用 read/glob/bash 工具按需取用
 (L3)。本模块只负责发现与渲染,不做任何 I/O 之外的策略。
 """
 

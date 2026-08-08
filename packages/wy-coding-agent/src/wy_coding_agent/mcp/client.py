@@ -6,7 +6,7 @@ async context managers, while the harness ``Tool`` contract is synchronous.
 event loop; each server connection lives inside one long-lived task on that
 loop. This module owns only the bridging — connection lifecycle, tool naming
 and discovery; per-call execution lives in
-``wy_coding_agent.tools.mcp_tool.MCPTool``, which reaches the loop through
+``wy_coding_agent.mcp.tool.MCPTool``, which reaches the loop through
 ``_ServerConnection.acquire()``.
 
 Server connect failures are logged and skipped — a broken MCP server must not
@@ -27,7 +27,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from wy_core import Tool
 
 from wy_coding_agent.config import MCPServerConfig
-from wy_coding_agent.tools.mcp_tool import MCPTool
+from wy_coding_agent.mcp.tool import MCPTool
 
 _log = logging.getLogger(__name__)
 
