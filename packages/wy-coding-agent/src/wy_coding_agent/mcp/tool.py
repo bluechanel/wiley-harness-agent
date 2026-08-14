@@ -43,7 +43,11 @@ def result_to_text(result: Any) -> str:
 
 
 class MCPTool(Tool):
-    """One remote MCP tool, executing through the bridge's background loop."""
+    """One remote MCP tool, executing through the bridge's background loop.
+
+    默认 ``deferred=True``:MCP 工具通常量大且描述长,不进默认工具列表,
+    由模型经 `tool_search` 按需加载(见 `tools/tool_search.py`)。
+    """
 
     def __init__(
         self,
@@ -53,11 +57,13 @@ class MCPTool(Tool):
         parameters: dict,
         remote_name: str,
         channel: MCPChannel,
+        deferred: bool = True,
     ) -> None:
         self.name = name
         self.description = description
         self.parameters = parameters
         self.remote_name = remote_name
+        self.deferred = deferred
         self._channel = channel
 
     def execute(self, input: dict) -> str:

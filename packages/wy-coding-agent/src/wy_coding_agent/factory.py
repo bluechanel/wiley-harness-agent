@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from wy_core import Agent, AgentState, AuditLog, Model, Session, Tool, ToolHook
+from wy_core import Agent, AgentState, AuditLog, Model, Session, Tool, ToolHook, ToolSet
 
 from wy_coding_agent.anthropic import AnthropicModel
 from wy_coding_agent.config import (
@@ -27,6 +27,7 @@ from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent import AgentTool
 from wy_coding_agent.tools.plan import ExitPlanModeTool
+from wy_coding_agent.tools.tool_search import ToolSearchTool
 from wy_coding_agent.skills import SkillTool
 from wy_coding_agent.tool_policy import WorkspaceToolHook
 
@@ -94,8 +95,11 @@ def create_agent(
     MCP 工具可用）；名为 `agent` 的子 agent 派生工具总是额外装配（复用
     同一 model 与既有工具集，见 `tools/agent.py`），`exit_plan_mode`
     工具与 plan 模式状态同样总是装配（`/plan` 交互见 TUI；约束提示经
-    reminders 层逐回合注入，返回值的 `plan_mode` 属性供宿主切换）。prompt_providers
-    省略时使用
+    reminders 层逐回合注入，返回值的 `plan_mode` 属性供宿主切换）。
+    工具集里凡 `Tool.deferred` 为真的（MCP 工具默认如此）都是懒加载：
+    不随请求发送，只有名字进 system prompt，模型经额外装配的 `tool_search`
+    工具按需加载（存在懒加载工具时才装配，见 `tools/tool_search.py`）。
+    prompt_providers 省略时使用
     default_prompt_providers(model.name, workspace, skills) 的默认组合；
     sessions_dir 省略时写入当前目录 .agent_session/。mcp_config 为 MCP
     配置文件路径（TOML 的 [[mcp.servers]] 段），None 即不启用 MCP，传入时
@@ -122,10 +126,13 @@ def create_agent(
     all_tools = base_tools + (mcp_manager.tools if mcp_manager else ())
     if skills:
         all_tools = all_tools + (SkillTool(skills),)
+    # 懒加载工具只有名字进 system prompt(schema 经 tool_search 按需取回);
+    # 下面追加的 agent/exit_plan_mode/tool_search 都是直接加载,不进清单。
+    deferred_names = tuple(tool.name for tool in all_tools if tool.deferred)
     system = build_prompt(
         instruction,
         (
-            default_prompt_providers(model.name, workspace, skills)
+            default_prompt_providers(model.name, workspace, skills, deferred_names)
             if prompt_providers is None
             else tuple(prompt_providers)
         ),
@@ -151,6 +158,12 @@ def create_agent(
             mcp_manager.close()
         raise ConfigError(f"工具名冲突：{sorted(duplicates)}")
 
+    # 工具列表按需收缩:懒加载工具不随请求发送,由 tool_search 加载进来。
+    # 没有懒加载工具就不装搜索工具,避免多一个无用工具占上下文。
+    toolset = ToolSet(all_tools)
+    if toolset.deferred:
+        toolset.add(ToolSearchTool(toolset))
+
     session = Session(
         max_context_tokens=compaction.max_context_tokens,
         keep_recent=compaction.keep_recent,
@@ -167,13 +180,13 @@ def create_agent(
     if tool_hook is None:
         tool_hook = WorkspaceToolHook(
             workspace or Path.cwd(),
-            tools={t.name: t for t in all_tools},
+            tools={t.name: t for t in toolset.all},
         )
 
     try:
         agent = Agent(
             model=model,
-            tools=all_tools,
+            tools=toolset,
             system=system,
             state=state,
             audit=(

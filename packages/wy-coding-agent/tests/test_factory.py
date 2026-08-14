@@ -2,11 +2,23 @@
 
 from pathlib import Path
 
-from wy_core import Usage
+from wy_core import Tool, Usage
 
 from wy_coding_agent import create_agent
 
 from app_helpers import FakeModel, drain, make_text_end
+
+
+class _LazyTool(Tool):
+    """懒加载工具:只有名字进 system prompt,需经 tool_search 加载。"""
+
+    name = "lazy"
+    description = "懒加载的示例工具"
+    parameters = {"type": "object", "properties": {}}
+    deferred = True
+
+    def execute(self, input: dict) -> str:
+        return "lazy ok"
 
 
 def test_create_agent_runs_and_audits(tmp_path: Path) -> None:
@@ -125,4 +137,46 @@ def test_create_agent_without_skills_dirs_has_no_skill_tool(tmp_path: Path) -> N
     # skills_dirs=None 即不启用 skill;agent 工具总是装配
     assert [tool.name for tool in model.calls[0]["tools"]] == ["agent", "exit_plan_mode"]
     assert "# Skills" not in (model.calls[0]["system"] or "")
+    service.close()
+
+
+def test_create_agent_without_deferred_tools_has_no_tool_search(tmp_path: Path) -> None:
+    model = FakeModel([[make_text_end("答")]])
+    service = create_agent(
+        model=model, tools=(), sessions_dir=tmp_path, workspace=tmp_path, audit=False
+    )
+    drain(service)
+
+    # 没有懒加载工具就不装搜索工具,system prompt 也没有清单段
+    assert "tool_search" not in service._agent.tools
+    assert "# Deferred tools" not in (model.calls[0]["system"] or "")
+    service.close()
+
+
+def test_create_agent_defers_lazy_tools_and_wires_tool_search(tmp_path: Path) -> None:
+    model = FakeModel([[make_text_end("答")], [make_text_end("再答")]])
+    service = create_agent(
+        model=model,
+        tools=(_LazyTool(),),
+        sessions_dir=tmp_path,
+        workspace=tmp_path,
+        audit=False,
+    )
+
+    drain(service, "问")
+
+    # 懒加载工具不随请求发送,只有名字进 system prompt
+    assert [tool.name for tool in model.calls[0]["tools"]] == [
+        "agent",
+        "exit_plan_mode",
+        "tool_search",
+    ]
+    system = model.calls[0]["system"] or ""
+    assert "# Deferred tools" in system
+    assert "- lazy" in system
+
+    # tool_search 加载后,下一轮请求就带上它
+    service._agent.tools["tool_search"].execute({"query": "select:lazy"})
+    drain(service, "再问")
+    assert "lazy" in [tool.name for tool in model.calls[1]["tools"]]
     service.close()

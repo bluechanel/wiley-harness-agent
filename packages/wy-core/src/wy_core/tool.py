@@ -36,6 +36,9 @@ class Tool(ABC):
     - ``name`` 工具唯一名;``description`` 给模型看的用途说明;
       ``parameters`` 入参 JSON Schema(Anthropic 的 input_schema、
       OpenAI 的 parameters,由 Model 实现映射到厂商字段)。
+    - ``deferred`` 区分直接加载与懒加载:默认 False 即每次请求都发给
+      模型;True 表示懒加载——不进默认工具列表(只有名字可被使用方
+      披露),由使用方经 ``ToolSet.activate`` 按需加载后才随请求发送。
     - ``execute`` 为同步方法,允许阻塞(Agent 经 asyncio.to_thread
       执行,不会冻结事件循环);失败直接 raise,由 Agent 统一转
       ``Error: ...`` 的 tool_result(is_error=True)返回给模型,
@@ -47,6 +50,7 @@ class Tool(ABC):
     name: str
     description: str
     parameters: dict
+    deferred: bool = False
 
     @abstractmethod
     def execute(self, input: dict) -> str:

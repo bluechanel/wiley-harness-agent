@@ -13,6 +13,7 @@ from wy_core.model import Model, ModelEnd, ModelError, TextDelta, ThinkingDelta
 from wy_core.session import Session
 from wy_core.state import AgentState
 from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult
+from wy_core.toolset import ToolSet
 
 
 @dataclass
@@ -46,16 +47,18 @@ class Agent:
 
     ``state``/``session`` 只能传其一:只传 ``session``(或都不传)时内部
     包装为无扩展的 ``AgentState``,``agent.session`` 始终是
-    ``state.session`` 的兼容别名。审计默认开启:省略 ``audit`` 即写入
-    CWD/.wy_audit/,显式传 ``audit=None`` 关闭。单个 Agent 实例不支持
-    并发 ``run``。
+    ``state.session`` 的兼容别名。``tools`` 可传工具序列或 ``ToolSet``:
+    传序列时内部包装为 ``ToolSet``,每轮请求只发 ``ToolSet.available``
+    (直接加载的工具 + 已激活的懒加载工具),执行仍按名字在全量表里查。
+    审计默认开启:省略 ``audit`` 即写入 CWD/.wy_audit/,显式传
+    ``audit=None`` 关闭。单个 Agent 实例不支持并发 ``run``。
     """
 
     def __init__(
         self,
         *,
         model: Model,
-        tools: Sequence[Tool] = (),
+        tools: Sequence[Tool] | ToolSet = (),
         system: str | None = None,
         session: Session | None = None,
         state: AgentState | None = None,
@@ -64,9 +67,7 @@ class Agent:
         tool_hook: ToolHook | None = None,
     ) -> None:
         self.model = model
-        self.tools = {t.name: t for t in tools}
-        if len(self.tools) != len(tools):
-            raise ValueError("工具名重复")
+        self.toolset = tools if isinstance(tools, ToolSet) else ToolSet(tools)
         self.system = system
         if state is not None and session is not None:
             raise ValueError("session 与 state 只能传其一")
@@ -79,10 +80,16 @@ class Agent:
             "agent_start",
             {
                 "model": model.name,
-                "tools": list(self.tools),
+                "tools": [t.name for t in self.toolset.all],
+                "deferred_tools": [t.name for t in self.toolset.deferred],
                 "state": list(self.state.extensions),
             },
         )
+
+    @property
+    def tools(self) -> dict[str, Tool]:
+        """全量工具表(含未激活的懒加载工具),按名字索引。"""
+        return {tool.name: tool for tool in self.toolset.all}
 
     async def run(
         self, user_input: str, *, reminders: Sequence[str] = ()
@@ -110,18 +117,19 @@ class Agent:
                     yield Compaction(dropped=info["dropped"], summary=info["summary"])
 
                 end = None
+                available = list(self.toolset.available)
                 self._audit(
                     "request",
                     {
                         "messages": [m.to_dict() for m in self.session.messages],
                         "system": self.system,
-                        "tools": list(self.tools),
+                        "tools": [t.name for t in available],
                     },
                 )
                 async for event in self.model.stream(
                     list(self.session.messages),
                     system=self.system,
-                    tools=list(self.tools.values()) or None,
+                    tools=available or None,
                 ):
                     if isinstance(event, ModelEnd):
                         end = event
@@ -196,7 +204,7 @@ class Agent:
             )
             if not decision.allowed:
                 return f"工具调用被拒绝: {decision.reason or '未说明原因'}", True
-        tool = self.tools.get(block.name)
+        tool = self.toolset.get(block.name)
         if tool is None:
             return f"Error: unknown tool {block.name}", True
         try:

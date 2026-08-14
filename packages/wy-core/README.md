@@ -183,6 +183,36 @@ class ReadFile(Tool):
 - 模型调用了不存在的工具名 → `Error: unknown tool <name>`，同样不中断；
 - `parameters` 的 JSON Schema 由你的 `Model` 实现映射到厂商字段（Anthropic 的 `input_schema`、OpenAI 的 `parameters`）。
 
+## 懒加载工具与 ToolSet
+
+工具还有第四个类属性 `deferred`（默认 `False`）：为真即**懒加载**——不进默认工具列表，不随请求发送，直到使用方显式加载它。工具一多（尤其是 MCP 工具），把全部 schema 塞进每次请求会白白占掉大量上下文；懒加载让消费方只披露名字，由模型经自建的"工具搜索"工具按需取回 schema。
+
+```python
+from wy_core import Agent, ToolSet
+
+
+class SendSlackMessage(Tool):
+    name = "slack_send"
+    description = "发一条 Slack 消息"
+    parameters = {...}
+    deferred = True          # 懒加载:默认不发给模型
+
+    def execute(self, input: dict) -> str: ...
+
+
+toolset = ToolSet([ReadFile(), SendSlackMessage()])
+toolset.available          # (ReadFile(),)                —— 本轮请求实际发送的工具
+toolset.deferred           # (SendSlackMessage(),)        —— 待加载的工具
+toolset.activate("slack_send")   # ("slack_send",)        —— 加载它,返回真正新激活的名字
+toolset.available          # (ReadFile(), SendSlackMessage())
+
+agent = Agent(model=..., tools=toolset)   # 也可以直接传工具序列,内部自行包装
+```
+
+- `Agent` 每轮请求只发 `toolset.available`，执行时按名字查**全量表**（未激活的工具被调用也能正常执行）；
+- `activate` 幂等：未知名、非懒加载的名字与重复激活一律忽略并返回空，调用方可以把模型给的名字直接传进来；
+- 激活状态是内存态，核心不做持久化；名字清单怎么披露给模型（system prompt、reminder）、用什么工具去搜，由消费方决定（参考实现见 wy-coding-agent 的 `tool_search` 工具）。
+
 ## 工具审批 Hook
 
 `ToolHook` 允许在工具执行前对每次调用进行审批（批准或拒绝），适用于实现用户确认对话框、权限策略等场景。`Agent` 与 `RealtimeAgent` 均支持。
@@ -225,7 +255,7 @@ agent = RealtimeAgent(model=..., tools=[...], tool_hook=MyApproval(), mic=..., s
 Agent(
     *,
     model: Model,                    # 必填
-    tools: Sequence[Tool] = (),      # 工具名重复抛 ValueError
+    tools: Sequence[Tool] | ToolSet = (),  # 工具名重复抛 ValueError；见「懒加载工具与 ToolSet」
     system: str | None = None,       # 系统提示词
     session: Session | None = None,  # 省略 = 新建默认 Session
     state: AgentState | None = None, # 与 session 互斥；见「状态管理」章

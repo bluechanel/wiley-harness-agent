@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from wy_core import Model
+from wy_core import Model, ToolResult, ToolUseBlock
 
 from wy_coding_agent import create_agent
 from wy_coding_agent.config import (
@@ -19,6 +19,8 @@ from wy_coding_agent.mcp import (
     tool_full_name,
 )
 from wy_coding_agent.mcp.tool import result_to_text
+
+from app_helpers import FakeModel, drain, end_event, make_text_end
 
 # --- config parsing ---
 
@@ -175,6 +177,7 @@ def test_manager_exposes_prefixed_tools_and_executes_calls(
     assert add.description == "Add two integers."
     assert add.parameters["type"] == "object"
     assert "a" in add.parameters["properties"]
+    assert add.deferred is True  # MCP 工具默认懒加载,经 tool_search 按需加载
 
     assert add.execute({"a": 2, "b": 3}) == "5"
 
@@ -251,6 +254,14 @@ def test_create_agent_converts_mcp_config_servers_into_tools(tmp_path: Path) -> 
             "mcp__demo__boom",
             "agent",
             "exit_plan_mode",
+            "tool_search",
+        }
+        # MCP 工具默认懒加载:不随请求发送,只有 tool_search 能把它们捞出来。
+        available = {tool.name for tool in agent._agent.toolset.available}
+        assert available == {"agent", "exit_plan_mode", "tool_search"}
+        assert {tool.name for tool in agent._agent.toolset.deferred} == {
+            "mcp__demo__add",
+            "mcp__demo__boom",
         }
     finally:
         agent.close()
@@ -264,3 +275,59 @@ def test_create_agent_rejects_missing_mcp_config_file(tmp_path: Path) -> None:
             mcp_config=tmp_path / "absent.toml",
             sessions_dir=tmp_path / "sessions",
         )
+
+
+def test_model_loads_mcp_tool_through_tool_search_then_calls_it(tmp_path: Path) -> None:
+    """端到端:懒加载的 MCP 工具经 tool_search 加载后在同一回合被调用。"""
+    script_path = tmp_path / "server.py"
+    script_path.write_text(_SERVER_SCRIPT, encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        f"""
+        [[mcp.servers]]
+        name = "demo"
+        transport = "stdio"
+        command = "{sys.executable}"
+        args = ["{script_path}"]
+        """,
+    )
+    model = FakeModel(
+        [
+            [
+                end_event(
+                    ToolUseBlock(id="s1", name="tool_search", input={"query": "add"}),
+                    stop_reason="tool_use",
+                )
+            ],
+            [
+                end_event(
+                    ToolUseBlock(
+                        id="c1", name="mcp__demo__add", input={"a": 2, "b": 3}
+                    ),
+                    stop_reason="tool_use",
+                )
+            ],
+            [make_text_end("5")],
+        ]
+    )
+    service = create_agent(
+        model=model,
+        tools=(),
+        mcp_config=config_path,
+        sessions_dir=tmp_path / "sessions",
+        audit=False,
+    )
+    try:
+        results = [e for e in drain(service, "算 2+3") if isinstance(e, ToolResult)]
+
+        search_result = results[0]
+        assert search_result.is_error is False
+        assert '"name": "mcp__demo__add"' in search_result.content  # 回完整 schema
+        assert results[1].content == "5"  # 加载后的工具照常执行
+
+        # 首轮不发 MCP 工具,加载后随下一轮请求发出
+        assert "mcp__demo__add" not in [t.name for t in model.calls[0]["tools"]]
+        assert "mcp__demo__add" in [t.name for t in model.calls[1]["tools"]]
+        assert "mcp__demo__boom" not in [t.name for t in model.calls[1]["tools"]]
+    finally:
+        service.close()

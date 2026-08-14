@@ -5,12 +5,24 @@ from pathlib import Path
 
 import pytest
 
-from wy_core import ModelError, TextBlock, ToolResult, ToolUseBlock
+from wy_core import ModelError, TextBlock, Tool, ToolResult, ToolUseBlock
 
 from wy_coding_agent import create_agent
 from wy_coding_agent.tools.agent import AgentTool
 
 from app_helpers import EchoTool, FakeModel, drain, end_event, make_text_end
+
+
+class _LazyTool(Tool):
+    """懒加载工具:默认不随请求发送,需经 tool_search 加载。"""
+
+    name = "lazy"
+    description = "懒加载的示例工具"
+    parameters = {"type": "object", "properties": {}}
+    deferred = True
+
+    def execute(self, input: dict) -> str:
+        return "lazy ok"
 
 
 def _tool_use(name: str, input: dict) -> object:
@@ -131,4 +143,53 @@ def test_create_agent_subagent_audit_next_to_parent(tmp_path: Path) -> None:
 
     sub_audits = list(tmp_path.glob(f"{service.session_id}.sub-*.audit.jsonl"))
     assert len(sub_audits) == 1  # 与主审计同目录,按会话基名命名
+    service.close()
+
+
+def test_subagent_gets_its_own_tool_search() -> None:
+    fake = FakeModel(
+        [
+            [
+                end_event(
+                    _tool_use("tool_search", {"query": "select:lazy"}),
+                    stop_reason="tool_use",
+                )
+            ],
+            [make_text_end("sub result")],
+        ]
+    )
+    tool = AgentTool(model=fake, tools=(EchoTool(), _LazyTool()))
+
+    assert tool.execute({"task": "用懒加载工具"}) == "sub result"
+    # 子 agent 自带 tool_search,懒加载工具首轮不发、加载后随下一轮发出
+    assert [t.name for t in fake.calls[0]["tools"]] == ["echo", "tool_search"]
+    assert [t.name for t in fake.calls[1]["tools"]] == ["echo", "lazy", "tool_search"]
+
+
+def test_subagent_activation_does_not_leak_to_parent(tmp_path: Path) -> None:
+    fake = FakeModel(
+        [
+            [end_event(_tool_use("agent", {"task": "调研"}), stop_reason="tool_use")],
+            [
+                end_event(
+                    _tool_use("tool_search", {"query": "select:lazy"}),
+                    stop_reason="tool_use",
+                )
+            ],
+            [make_text_end("sub result")],
+            [make_text_end("done")],
+        ]
+    )
+    service = create_agent(
+        model=fake, tools=(_LazyTool(),), sessions_dir=tmp_path, audit=False
+    )
+
+    drain(service, "去")
+
+    # 子 agent 加载了 lazy,父 agent 的工具列表不受影响
+    parent_first = [t.name for t in fake.calls[0]["tools"]]
+    parent_last = [t.name for t in fake.calls[3]["tools"]]
+    assert "lazy" not in parent_first and "lazy" not in parent_last
+    assert "lazy" in [t.name for t in fake.calls[2]["tools"]]  # 子 agent 第二轮
+    assert not service._agent.toolset.is_active("lazy")
     service.close()

@@ -5,10 +5,11 @@
 父 agent 的 Model 与工具实例(要求 Model 实现不持有事件循环绑定状态,
 如 ``AnthropicModel`` 每次 stream 新建客户端;bash 会话随实例与父共享),
 工具集取追加本工具之前的快照——构造上杜绝嵌套派生。每次派生在全新
-``wy_core.Session`` 中跑完整循环,``execute`` 由 wy-core 放在工具线程,
-线程内无事件循环,故以 ``asyncio.run`` 驱动;最终一条 assistant 消息的
-正文即工具结果,中间事件全部丢弃(黑盒展示)。审计每次派生独立成文件
-``<audit_base>.sub-<短id>.audit.jsonl``,与主审计同目录。
+``wy_core.Session`` 中跑完整循环,并另起一份 ``ToolSet``(含自己的
+``tool_search``),懒加载工具的激活状态与父 agent 隔离;``execute`` 由
+wy-core 放在工具线程,线程内无事件循环,故以 ``asyncio.run`` 驱动;最终
+一条 assistant 消息的正文即工具结果,中间事件全部丢弃(黑盒展示)。审计
+每次派生独立成文件 ``<audit_base>.sub-<短id>.audit.jsonl``,与主审计同目录。
 """
 
 import asyncio
@@ -16,7 +17,9 @@ import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
-from wy_core import Agent, AuditLog, Model, Session, Tool
+from wy_core import Agent, AuditLog, Model, Session, Tool, ToolSet
+
+from wy_coding_agent.tools.tool_search import ToolSearchTool
 
 _MAX_RESULT_CHARS = 30_000  # 结果上限,对齐 bash/grep 的输出截断惯例
 
@@ -90,10 +93,15 @@ class AgentTool(Tool):
             max_context_tokens=self._max_context_tokens,
             keep_recent=self._keep_recent,
         )
+        # 每次派生一份独立 ToolSet 与 tool_search:懒加载工具的激活状态
+        # 与父 agent 完全隔离,子 agent 的加载不会污染父级的工具列表。
+        toolset = ToolSet(self._tools)
+        if toolset.deferred:
+            toolset.add(ToolSearchTool(toolset))
         try:
             agent = Agent(
                 model=self._model,
-                tools=self._tools,
+                tools=toolset,
                 system=self._system,
                 session=session,
                 audit=audit,

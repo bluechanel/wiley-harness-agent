@@ -3,6 +3,7 @@ from pathlib import Path
 from wy_coding_agent.prompt_template import (
     AgentMDProvider,
     BasePromptProvider,
+    DeferredToolProvider,
     MemoryProvider,
     ModelProvider,
     SkillProvider,
@@ -114,6 +115,17 @@ def test_unreadable_file_returns_none(tmp_path: Path) -> None:
     assert MemoryProvider(memory_path).provide() is None
 
 
+def test_deferred_tool_provider() -> None:
+    assert DeferredToolProvider(()).provide() is None
+
+    section = DeferredToolProvider(("mcp__demo__add", "mcp__demo__boom")).provide()
+    assert section is not None
+    assert section.startswith("# Deferred tools")
+    assert "tool_search" in section
+    assert "- mcp__demo__add" in section
+    assert "- mcp__demo__boom" in section
+
+
 def test_default_prompt_providers_order(tmp_path: Path) -> None:
     providers = default_prompt_providers("model-x", tmp_path)
     assert [type(provider) for provider in providers] == [
@@ -121,5 +133,6 @@ def test_default_prompt_providers_order(tmp_path: Path) -> None:
         WorkspaceProvider,
         AgentMDProvider,
         SkillProvider,
+        DeferredToolProvider,
         MemoryProvider,
     ]

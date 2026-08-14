@@ -75,6 +75,7 @@ from wy_core.realtime_model import (
 from wy_core.session import Session
 from wy_core.state import AgentState, StateExtension
 from wy_core.tool import Tool, ToolApproval, ToolCall, ToolHook, ToolResult, ApprovalRequest
+from wy_core.toolset import ToolSet
 
 __all__ = [
     "Agent",
@@ -122,6 +123,7 @@ __all__ = [
     "ToolResult",
     "ToolResultBlock",
     "ToolResultsSubmitted",
+    "ToolSet",
     "ToolUseBlock",
     "TurnCommitted",
     "TurnDiscarded",

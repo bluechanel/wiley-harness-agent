@@ -112,6 +112,32 @@ class SkillProvider(BasePromptProvider):
         )
 
 
+class DeferredToolProvider(BasePromptProvider):
+    """列出懒加载工具的名字(schema 不随请求发送,故只披露名字)。
+
+    对齐 Claude Code:懒加载工具的完整定义由模型经 ``tool_search`` 工具
+    按需取回,清单本身进 system prompt 保持前缀稳定(缓存友好);已加载的
+    工具仍留在清单里(重复加载是无害的幂等操作)。
+    """
+
+    def __init__(self, tool_names: Sequence[str]) -> None:
+        self._names = tuple(name for name in tool_names if name)
+
+    def provide(self) -> str | None:
+        if not self._names:
+            return None
+        entries = "\n".join(f"- {name}" for name in self._names)
+        return (
+            "# Deferred tools\n\n"
+            "The following tools are deferred: only their names are known "
+            "here, their schemas are NOT loaded — calling them directly will "
+            "fail. Use the `tool_search` tool to load a tool's schema before "
+            'calling it (`select:<name>` for a direct pick, or keywords to '
+            "search):\n"
+            f"{entries}"
+        )
+
+
 class MemoryProvider(BasePromptProvider):
     """Inject persistent memory from a markdown file.
 
@@ -132,11 +158,14 @@ def default_prompt_providers(
     model: str = "",
     workspace: Path | None = None,
     skills: Sequence[Skill] = (),
+    deferred_tools: Sequence[str] = (),
 ) -> tuple[BasePromptProvider, ...]:
     """Assemble the default provider chain used by `create_agent`.
 
     skills 为已发现的 Skill 元组（`wy_coding_agent.skills.discover_skills`
-    的结果，由 factory 传入），缺省为空即不注入 Skills 段。
+    的结果，由 factory 传入），缺省为空即不注入 Skills 段；deferred_tools
+    为懒加载工具名（`Tool.deferred` 为真的工具），缺省为空即不注入
+    Deferred tools 段。
     """
     root = (workspace or Path.cwd()).expanduser()
     return (
@@ -144,6 +173,7 @@ def default_prompt_providers(
         WorkspaceProvider(root),
         AgentMDProvider(root),
         SkillProvider(skills),
+        DeferredToolProvider(deferred_tools),
         MemoryProvider(root / "MEMORY.md"),
     )
 

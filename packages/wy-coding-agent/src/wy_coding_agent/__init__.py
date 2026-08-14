@@ -25,6 +25,7 @@ from wy_coding_agent.mcp import MCPClientManager
 from wy_coding_agent.prompt_template import (
     AgentMDProvider,
     BasePromptProvider,
+    DeferredToolProvider,
     MemoryProvider,
     ModelProvider,
     SkillProvider,
@@ -46,6 +47,7 @@ from wy_coding_agent.tool_policy import ApprovalHandler, WorkspaceToolHook
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent import AgentTool
 from wy_coding_agent.tools.plan import ExitPlanModeTool
+from wy_coding_agent.tools.tool_search import ToolSearchTool
 from wy_coding_agent.skills import SkillTool
 
 __all__ = [
@@ -59,6 +61,7 @@ __all__ = [
     "ConfigError",
     "ConversationService",
     "DEFAULT_TOOLS",
+    "DeferredToolProvider",
     "ExitPlanModeTool",
     "MCPClientManager",
     "MCPServerConfig",
@@ -73,6 +76,7 @@ __all__ = [
     "Skill",
     "SkillProvider",
     "SkillTool",
+    "ToolSearchTool",
     "WorkspaceProvider",
     "WorkspaceToolHook",
     "bootstrap",
