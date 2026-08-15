@@ -159,10 +159,21 @@ def test_其他工具默认放行():
 def test_bash_无handler时拒绝():
     hook = _hook()
     result = _asyncio_run(
-        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "mkdir data"}))
     )
     assert result.allowed is False
     assert "bash" in result.reason
+
+
+def test_bash_只读命令直接放行():
+    """分级为 allow 的命令 approve() 返回 None，压根不进审批。"""
+    handler = FakeApprovalHandler()
+    hook = _hook(handler=handler)
+    result = _asyncio_run(
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "git status"}))
+    )
+    assert result.allowed is True
+    assert len(handler.calls) == 0
 
 
 def test_bash_有handler时委托():
@@ -171,7 +182,7 @@ def test_bash_有handler时委托():
     )
     hook = _hook(handler=handler)
     result = _asyncio_run(
-        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "mkdir data"}))
     )
     assert result.allowed is True
     assert len(handler.calls) == 1
@@ -179,7 +190,22 @@ def test_bash_有handler时委托():
     # 验证 ApprovalRequest 被正确传递
     assert len(handler.requests) == 1
     assert handler.requests[0].heading == "Bash 命令"
-    assert handler.requests[0].key == "bash:ls"
+    assert handler.requests[0].key == "bash:mkdir data"
+
+
+def test_bash_危险命令不给审批机会():
+    """工具 approve() 抛异常即硬拒绝：handler 不该被打扰。"""
+    handler = FakeApprovalHandler()
+    hook = _hook(handler=handler)
+    result = _asyncio_run(
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "sudo rm x"}))
+    )
+    assert result.allowed is False
+    assert "策略拒绝" in result.reason
+    assert len(handler.calls) == 0
+    assert hook.can_remember(
+        ToolCall(id="c1", name="bash", input={"command": "sudo rm x"})
+    ) is False
 
 
 def test_read_工作区外文件_无handler时拒绝():
@@ -245,7 +271,7 @@ def test_set_handler_替换handler():
     hook = _hook()
     # 无 handler → bash 被拒
     r1 = _asyncio_run(
-        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "mkdir data"}))
     )
     assert r1.allowed is False
 
@@ -253,7 +279,7 @@ def test_set_handler_替换handler():
     handler = FakeApprovalHandler()
     hook.set_handler(handler)
     r2 = _asyncio_run(
-        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "mkdir data"}))
     )
     assert r2.allowed is True
     assert len(handler.calls) == 1
@@ -261,7 +287,7 @@ def test_set_handler_替换handler():
     # 移除 handler → bash 又被拒
     hook.set_handler(None)
     r3 = _asyncio_run(
-        hook.approve(ToolCall(id="c1", name="bash", input={"command": "ls"}))
+        hook.approve(ToolCall(id="c1", name="bash", input={"command": "mkdir data"}))
     )
     assert r3.allowed is False
 
@@ -274,7 +300,7 @@ def test_agent_bash被审批拒绝():
         [
             [
                 _end_event(
-                    ToolUseBlock(id="t1", name="bash", input={"command": "rm -rf /"}),
+                    ToolUseBlock(id="t1", name="bash", input={"command": "mkdir data"}),
                     stop_reason="tool_use",
                 )
             ],
@@ -291,6 +317,33 @@ def test_agent_bash被审批拒绝():
     result = events[1]
     assert isinstance(result, ToolResult) and result.is_error
     assert "bash" in result.content
+
+
+def test_agent_bash危险命令硬拒绝且不执行():
+    """deny 档命令即使 handler 会批准也不执行。"""
+    handler = FakeApprovalHandler(decision=ToolApproval(allowed=True, reason="ok"))
+    model = _FakeModel(
+        [
+            [
+                _end_event(
+                    ToolUseBlock(id="t1", name="bash", input={"command": "sudo rm -rf /"}),
+                    stop_reason="tool_use",
+                )
+            ],
+            [_text_end("好")],
+        ]
+    )
+    agent = Agent(
+        model=model,
+        tools=[_BASH],
+        tool_hook=_hook(handler=handler),
+        audit=None,
+    )
+    events = _run_events(agent, "运行 bash")
+    result = events[1]
+    assert isinstance(result, ToolResult) and result.is_error
+    assert "策略拒绝" in result.content
+    assert len(handler.calls) == 0  # 连问都没问
 
 
 def test_agent_read工作区内文件放行():
@@ -343,7 +396,7 @@ def test_agent_无hook时行为不变():
 def test_allow_always_后同一命令不再走审批():
     handler = FakeApprovalHandler()
     hook = _hook(handler=handler)
-    call = ToolCall(id="c1", name="bash", input={"command": "ls -la"})
+    call = ToolCall(id="c1", name="bash", input={"command": "mkdir data"})
 
     assert hook.can_remember(call) is True
     hook.allow_always(call)
@@ -356,11 +409,11 @@ def test_allow_always_不放宽到其他命令():
     handler = FakeApprovalHandler()
     hook = _hook(handler=handler)
     hook.allow_always(
-        ToolCall(id="c1", name="bash", input={"command": "ls"})
+        ToolCall(id="c1", name="bash", input={"command": "mkdir data"})
     )
 
     _asyncio_run(
-        hook.approve(ToolCall(id="c2", name="bash", input={"command": "ls -la"}))
+        hook.approve(ToolCall(id="c2", name="bash", input={"command": "mkdir other"}))
     )
     assert len(handler.calls) == 1  # 命令不同，仍需审批
 

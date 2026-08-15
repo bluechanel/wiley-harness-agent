@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from wy_coding_agent import (
+    BashConfig,
     CompactionConfig,
     ConfigError,
+    load_bash_config,
     load_compaction_config,
     load_skills_config,
 )
@@ -92,3 +94,41 @@ def test_load_skills_config_rejects_invalid(tmp_path: Path, body: str) -> None:
     config_path.write_text(body, encoding="utf-8")
     with pytest.raises(ConfigError):
         load_skills_config(config_path)
+
+
+def test_load_bash_config_reads_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[bash]\nallow = ["uv run pytest:*", "uv sync"]\n'
+        'deny = ["git push:*"]\ntimeout = 300\n',
+        encoding="utf-8",
+    )
+    assert load_bash_config(config_path) == BashConfig(
+        allow=("uv run pytest:*", "uv sync"),
+        deny=("git push:*",),
+        timeout=300,
+    )
+
+
+def test_load_bash_config_defaults_when_missing(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[anthropic]\napi_key = "k"\n', encoding="utf-8")
+    assert load_bash_config(config_path) == BashConfig()
+    assert load_bash_config(tmp_path / "missing.toml") == BashConfig()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "[bash]\ntimeout = 0\n",
+        '[bash]\ntimeout = "x"\n',
+        '[bash]\nallow = "uv run pytest"\n',
+        "[bash]\nallow = [1]\n",
+        '[bash]\nallow = [""]\n',
+    ],
+)
+def test_load_bash_config_rejects_invalid(tmp_path: Path, body: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(body, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_bash_config(config_path)

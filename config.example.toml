@@ -10,6 +10,19 @@ thinking_budget_tokens = 4096
 # max_context_tokens = 150000
 # keep_recent = 8
 
+# bash 命令分级（可选）：每条命令在执行前被判成 allow（直接跑）/ ask（弹审批
+# 卡片让你拍板）/ deny（硬拒绝，连问都不问）。allow 与 deny 是在内置规则之上
+# **追加**，不必重列 ls、cat、git status/diff/log 这些默认放行的只读命令。
+# 规则语法："uv run pytest:*" 是 token 前缀匹配，"pwd" 是整条精确匹配。
+# 注意：分级是分诊不是安全边界（静态分析 bash 不可能完备），真正的边界是审批。
+# 把跑测试/构建这类命令写进 allow 等于允许无人值守地执行仓库内代码——工作区内
+# 的 write/edit 本就自动放行，所以这是"能写文件 + 能自动跑"的组合，自己权衡。
+# timeout 为默认超时秒数（单次调用可用 timeout 参数覆盖，上限 600 秒）。
+# [bash]
+# allow = ["uv run pytest:*", "uv sync", "uv build:*", "git branch:*"]
+# deny = ["git push:*"]
+# timeout = 120
+
 # Agent Skills（可选）：dirs 为技能目录列表，每个技能是一个含 SKILL.md 的
 # 子目录（frontmatter name/description + 正文指令 + 随包文件）。目录顺序即
 # 优先级（同名先者胜），~ 会展开，相对路径按启动目录解析。

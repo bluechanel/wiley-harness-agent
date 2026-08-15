@@ -77,12 +77,12 @@ async def _wait_until(pilot, condition) -> None:
 
 def test_bash_approval_request() -> None:
     """Bash 工具的 approve() 返回正确的审批请求。"""
-    req = _BASH.approve({"command": "ls -la"}, Path("/tmp"))
+    req = _BASH.approve({"command": "mkdir data"}, Path("/tmp"))
     assert req is not None
     assert req.heading == "Bash 命令"
     assert req.question == "是否执行该命令？"
-    assert ("命令", "ls -la") in req.fields
-    assert req.key == "bash:ls -la"
+    assert ("命令", "mkdir data") in req.fields
+    assert req.key == "bash:mkdir data"
 
 
 def test_read_approval_request_outside_workspace() -> None:
@@ -363,7 +363,7 @@ class ApprovalBackend:
         self.decision: ToolApproval | None = None
 
     async def stream(self, user_input: str):
-        call = ToolCall(id="t1", name="bash", input={"command": "ls"})
+        call = ToolCall(id="t1", name="bash", input={"command": "mkdir data"})
         yield call
         self.decision = await self.hook.approve(call)
         yield ToolResult(id="t1", name="bash", content="ok", is_error=False)

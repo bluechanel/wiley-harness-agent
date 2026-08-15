@@ -9,6 +9,7 @@ from wy_coding_agent.anthropic import AnthropicModel
 from wy_coding_agent.config import (
     CompactionConfig,
     ConfigError,
+    load_bash_config,
     load_compaction_config,
     load_config,
     load_mcp_config,
@@ -26,6 +27,8 @@ from wy_coding_agent.session import SessionStore
 from wy_coding_agent.skills import default_skills_dirs, discover_skills
 from wy_coding_agent.tools import DEFAULT_TOOLS
 from wy_coding_agent.tools.agent import AgentTool
+from wy_coding_agent.tools.bash import BASH
+from wy_coding_agent.tools.bash_policy import build_policy
 from wy_coding_agent.tools.plan import ExitPlanModeTool
 from wy_coding_agent.tools.tool_search import ToolSearchTool
 from wy_coding_agent.skills import SkillTool
@@ -41,9 +44,11 @@ def bootstrap(
 
     config_path 缺省为调用方 CWD 的 config.toml，显式传参可覆盖。同一份文件
     提供 [anthropic]（模型构造参数，必填段）、[compaction]（可选）、[skills]
-    （可选）与 [[mcp.servers]]（可选）配置。组装内容：`load_config` 构造
-    `AnthropicModel`、内置工具集 `DEFAULT_TOOLS`、`load_compaction_config`
-    的压缩参数，最终交给 `create_agent`（mcp_config 即同一配置文件）。
+    （可选）、[bash]（可选，命令分级规则与默认超时，经 `BASH.configure` 装到
+    进程级的 bash 工具实例上）与 [[mcp.servers]]（可选）配置。组装内容：
+    `load_config` 构造 `AnthropicModel`、内置工具集 `DEFAULT_TOOLS`、
+    `load_compaction_config` 的压缩参数，最终交给 `create_agent`
+    （mcp_config 即同一配置文件）。
     skills 目录取 `load_skills_config`；未配置时用 `default_skills_dirs()`
     的官方默认（`~/.claude/skills` 优先于 `CWD/.claude/skills`），
     `dirs = []` 显式关闭。session_id 语义同 `create_agent`。配置/连接失败抛
@@ -58,6 +63,13 @@ def bootstrap(
         model=config.model,
         max_tokens=config.max_tokens,
         thinking_budget_tokens=config.thinking_budget_tokens,
+    )
+    # bash 分级策略是进程级的(BASH 是 DEFAULT_TOOLS 里的单例),在这里配置:
+    # create_agent 不读配置文件,策略只能由显式读配置的 bootstrap 装上。
+    bash_config = load_bash_config(config_path)
+    BASH.configure(
+        build_policy(allow=bash_config.allow, deny=bash_config.deny),
+        timeout=bash_config.timeout,
     )
     skills_dirs = load_skills_config(config_path)
     return create_agent(

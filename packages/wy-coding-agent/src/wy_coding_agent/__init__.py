@@ -11,9 +11,11 @@ Textual TUI。`bootstrap` 读 config.toml 一站式组装;`create_agent` 为
 from wy_coding_agent.anthropic import AnthropicModel, RedactedThinkingBlock
 from wy_coding_agent.config import (
     AnthropicConfig,
+    BashConfig,
     CompactionConfig,
     ConfigError,
     MCPServerConfig,
+    load_bash_config,
     load_compaction_config,
     load_config,
     load_mcp_config,
@@ -56,6 +58,7 @@ __all__ = [
     "AnthropicConfig",
     "ApprovalHandler",
     "AnthropicModel",
+    "BashConfig",
     "BasePromptProvider",
     "CompactionConfig",
     "ConfigError",
@@ -85,6 +88,7 @@ __all__ = [
     "default_prompt_providers",
     "default_skills_dirs",
     "discover_skills",
+    "load_bash_config",
     "load_compaction_config",
     "load_config",
     "load_mcp_config",

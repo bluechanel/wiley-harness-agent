@@ -1,4 +1,4 @@
-"""config.toml 解析:[anthropic]、[compaction]、[skills] 与 [[mcp.servers]]。"""
+"""config.toml 解析:[anthropic]、[compaction]、[skills]、[bash] 与 [[mcp.servers]]。"""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -102,6 +102,54 @@ def load_compaction_config(path: Path | None = None) -> CompactionConfig:
         raise ConfigError("配置项 compaction.keep_recent 必须是不小于 1 的整数。")
     return CompactionConfig(
         max_context_tokens=max_context_tokens, keep_recent=keep_recent
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class BashConfig:
+    """[bash] 段:命令分级规则与默认超时。
+
+    ``allow``/``deny`` 是在内置规则**之上追加**,不是替换——不必重列
+    ``ls``、``git status`` 这些默认放行项。规则语法见
+    ``tools/bash_policy.py``:``"uv run pytest:*"`` 前缀匹配、``"pwd"``
+    整条精确匹配。``timeout`` 超过工具上限(600 秒)时由工具截断。
+    """
+
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+    timeout: int = 120
+
+
+def _parse_rules(raw: object, label: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(
+        isinstance(entry, str) and entry.strip() for entry in raw
+    ):
+        raise ConfigError(f"配置项 {label} 必须是非空字符串数组。")
+    return tuple(entry.strip() for entry in raw)
+
+
+def load_bash_config(path: Path | None = None) -> BashConfig:
+    """Load the optional [bash] section; missing file/section means defaults."""
+    path = path if path is not None else Path.cwd() / "config.toml"
+    try:
+        with path.open("rb") as config_file:
+            config = tomllib.load(config_file)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return BashConfig()
+
+    bash_config = config.get("bash")
+    if not isinstance(bash_config, dict):
+        return BashConfig()
+
+    timeout = bash_config.get("timeout", BashConfig().timeout)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ConfigError("配置项 bash.timeout 必须是正整数(秒)。")
+    return BashConfig(
+        allow=_parse_rules(bash_config.get("allow"), "bash.allow"),
+        deny=_parse_rules(bash_config.get("deny"), "bash.deny"),
+        timeout=timeout,
     )
 
 
