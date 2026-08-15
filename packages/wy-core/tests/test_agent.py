@@ -47,6 +47,29 @@ def test_reminders_注入_user_消息尾部():
     ]
 
 
+def test_system_builder_逐提交实时计算():
+    state = {"plan": False}
+
+    def builder() -> str | None:
+        return "plan on" if state["plan"] else "plan off"
+
+    model = FakeModel([[make_text_end("一")], [make_text_end("二")]])
+    agent = Agent(model=model, audit=None, system_builder=builder)
+    run_events(agent, "问一")
+    assert model.calls[0]["system"] == "plan off"
+
+    state["plan"] = True
+    run_events(agent, "问二")
+    assert model.calls[1]["system"] == "plan on"
+
+
+def test_system_builder_缺省回落静态_system():
+    model = FakeModel([[make_text_end("好")]])
+    agent = Agent(model=model, audit=None, system="static")
+    run_events(agent, "hi")
+    assert model.calls[0]["system"] == "static"
+
+
 def test_工具回合():
     model = FakeModel(
         [

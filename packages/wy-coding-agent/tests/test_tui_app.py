@@ -11,7 +11,7 @@ from textual.widgets import Collapsible, Input, Markdown, Static
 
 from wy_core import TextDelta, ThinkingDelta, ToolCall, ToolResult, TurnEnd, Usage
 
-from wy_coding_agent.reminders import PlanModeState
+from wy_coding_agent.reminders import HarnessState
 from wy_coding_agent.tui.app import ChatApp
 
 _TIMEOUT_SECONDS = 5.0
@@ -22,7 +22,7 @@ class FakeBackend:
 
     def __init__(self, events=()):
         self._events = tuple(events)
-        self.plan_mode = PlanModeState()
+        self.plan_mode = HarnessState()
         self.tool_hook = None
         self.saved = 0
         self.inputs: list[str] = []
@@ -31,6 +31,15 @@ class FakeBackend:
         self.inputs.append(user_input)
         for event in self._events:
             yield event
+
+    def set_plan_mode(self, active: bool) -> None:
+        if self.plan_mode.plan_active == active:
+            return
+        if active:
+            self.plan_mode.enable_plan()
+        else:
+            self.plan_mode.disable_plan()
+        self.saved += 1
 
     def save_state(self) -> None:
         self.saved += 1
@@ -112,10 +121,10 @@ def test_app_plan_command_toggles_mode_and_hint() -> None:
             await _wait_until(pilot, lambda: prompt.has_focus)
             prompt.value = "/plan"
             await pilot.press("enter")
-            await _wait_until(pilot, lambda: backend.plan_mode.active)
+            await _wait_until(pilot, lambda: backend.plan_mode.plan_active)
             return str(app.query_one("#status", Static).content)
 
     status = asyncio.run(go())
-    assert backend.plan_mode.active
+    assert backend.plan_mode.plan_active
     assert backend.saved == 1
     assert "plan 模式" in status

@@ -15,7 +15,7 @@ from wy_core import (
     Usage,
 )
 
-from wy_coding_agent.reminders import PlanModeState, ReminderProvider
+from wy_coding_agent.reminders import HarnessState, ReminderProvider
 from wy_coding_agent.session import SessionRecord, SessionStore
 
 
@@ -36,10 +36,25 @@ class ConversationService:
         self._reminder_providers = tuple(reminder_providers)
 
     @property
-    def plan_mode(self) -> PlanModeState | None:
-        """plan 模式状态扩展;未装配(自定义组装)时为 None。"""
+    def plan_mode(self) -> HarnessState | None:
+        """harness 状态扩展(现承载 plan 模式);未装配(自定义组装)时为 None。"""
         extension = self._agent.state.get("plan_mode")
-        return extension if isinstance(extension, PlanModeState) else None
+        return extension if isinstance(extension, HarnessState) else None
+
+    def set_plan_mode(self, active: bool) -> None:
+        """翻转 plan 模式 harness 状态并落盘。
+
+        只改状态——system prompt 由 wy-core 的 ``system_builder`` 在下次提交
+        LLM 时按当前状态实时组装(plan 激活含 ``# Plan mode`` 段,否则不含)。
+        """
+        harness = self.plan_mode
+        if harness is None or harness.plan_active == active:
+            return
+        if active:
+            harness.enable_plan()
+        else:
+            harness.disable_plan()
+        self.save_state()
 
     @property
     def tool_hook(self) -> ToolHook | None:

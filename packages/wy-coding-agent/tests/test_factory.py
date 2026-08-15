@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from wy_core import Tool, Usage
+from wy_core import TextBlock, Tool, ToolUseBlock, Usage
 
-from wy_coding_agent import create_agent
+from wy_coding_agent import TextProvider, create_agent
 
-from app_helpers import FakeModel, drain, make_text_end
+from app_helpers import FakeModel, drain, end_event, make_text_end
 
 
 class _LazyTool(Tool):
@@ -29,7 +29,7 @@ def test_create_agent_runs_and_audits(tmp_path: Path) -> None:
         model=model,
         tools=(),
         sessions_dir=tmp_path,
-        instruction="你是测试助手",
+        instruction_providers=(TextProvider("你是测试助手"),),
     )
 
     drain(service, "问")
@@ -52,11 +52,39 @@ def test_create_agent_wires_plan_mode(tmp_path: Path) -> None:
     assert "exit_plan_mode" in tools
     # 子 agent 的工具集快照不含 exit_plan_mode:plan 模式属主会话状态
     assert "exit_plan_mode" not in {t.name for t in tools["agent"]._tools}
-    # exit 工具与 service 共享同一份状态
+    # exit 工具与 service 共享同一份 harness 状态
     assert service.plan_mode is not None
-    service.plan_mode.enable()
+    service.set_plan_mode(True)
     tools["exit_plan_mode"].execute({"plan": "x"})
-    assert not service.plan_mode.active
+    assert not service.plan_mode.plan_active
+    service.close()
+
+
+def test_create_agent_plan_mode_swaps_system(tmp_path: Path) -> None:
+    model = FakeModel(
+        [
+            [
+                end_event(
+                    TextBlock("调研"),
+                    ToolUseBlock(
+                        id="t1", name="exit_plan_mode", input={"plan": "## 方案"}
+                    ),
+                    stop_reason="tool_use",
+                )
+            ],
+            [make_text_end("开始实施")],
+        ]
+    )
+    service = create_agent(model=model, tools=(), sessions_dir=tmp_path, audit=False)
+    service.set_plan_mode(True)
+
+    drain(service, "提交")
+
+    # system 按 harness 状态逐提交组装:exit 工具前后同回合即切换
+    assert "# Plan mode" in (model.calls[0]["system"] or "")
+    assert "# Plan mode" not in (model.calls[1]["system"] or "")
+    # 子 agent 的基础 system 恒无 plan 段(plan 属主会话,子 agent 无 exit 工具)
+    assert "# Plan mode" not in (service._agent.tools["agent"]._system or "")
     service.close()
 
 
@@ -74,11 +102,15 @@ def test_create_agent_restores_history_and_usage(tmp_path: Path) -> None:
 
     assert restored.total_usage == Usage(input_tokens=7, output_tokens=3)
     assert restored.last_context_tokens == 10
-    assert [m.text for m in restored._agent.session.messages] == ["问一", "答一"]
+    # content[0] 是基础文本块(user 消息可能带 claudeMd 的 <system-reminder> 尾块)
+    assert [m.content[0].text for m in restored._agent.session.messages] == [
+        "问一",
+        "答一",
+    ]
 
     drain(restored, "问二")
     # 第二次请求包含恢复的问答对与新输入
-    texts = [m.text for m in second.calls[0]["messages"]]
+    texts = [m.content[0].text for m in second.calls[0]["messages"]]
     assert texts == ["问一", "答一", "问二"]
     restored.close()
 

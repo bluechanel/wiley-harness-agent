@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import cast
 
@@ -52,6 +52,10 @@ class Agent:
     (直接加载的工具 + 已激活的懒加载工具),执行仍按名字在全量表里查。
     审计默认开启:省略 ``audit`` 即写入 CWD/.wy_audit/,显式传
     ``audit=None`` 关闭。单个 Agent 实例不支持并发 ``run``。
+
+    ``system`` 是静态 system prompt;``system_builder`` 非 None 时每次模型
+    请求(``run`` 循环内每轮 ``model.stream``)前实时调用它取当前 system,
+    供调用方按可变 harness 状态组装(无 builder 时回落静态 ``system``)。
     """
 
     def __init__(
@@ -60,6 +64,7 @@ class Agent:
         model: Model,
         tools: Sequence[Tool] | ToolSet = (),
         system: str | None = None,
+        system_builder: Callable[[], str | None] | None = None,
         session: Session | None = None,
         state: AgentState | None = None,
         audit: AuditLog | None = _DEFAULT_AUDIT,
@@ -69,6 +74,7 @@ class Agent:
         self.model = model
         self.toolset = tools if isinstance(tools, ToolSet) else ToolSet(tools)
         self.system = system
+        self.system_builder = system_builder
         if state is not None and session is not None:
             raise ValueError("session 与 state 只能传其一")
         self.state = state if state is not None else AgentState(session=session)
@@ -90,6 +96,10 @@ class Agent:
     def tools(self) -> dict[str, Tool]:
         """全量工具表(含未激活的懒加载工具),按名字索引。"""
         return {tool.name: tool for tool in self.toolset.all}
+
+    def _current_system(self) -> str | None:
+        """按当前 harness 状态计算 system;无 builder 时回落静态 system。"""
+        return self.system_builder() if self.system_builder is not None else self.system
 
     async def run(
         self, user_input: str, *, reminders: Sequence[str] = ()
@@ -122,13 +132,13 @@ class Agent:
                     "request",
                     {
                         "messages": [m.to_dict() for m in self.session.messages],
-                        "system": self.system,
+                        "system": self._current_system(),
                         "tools": [t.name for t in available],
                     },
                 )
                 async for event in self.model.stream(
                     list(self.session.messages),
-                    system=self.system,
+                    system=self._current_system(),
                     tools=available or None,
                 ):
                     if isinstance(event, ModelEnd):

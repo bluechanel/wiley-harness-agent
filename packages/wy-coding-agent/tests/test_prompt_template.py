@@ -1,64 +1,111 @@
+from datetime import date
 from pathlib import Path
+import platform
 
 from wy_coding_agent.prompt_template import (
     AgentMDProvider,
-    BasePromptProvider,
+    ContextManagementProvider,
     DeferredToolProvider,
+    EnvironmentProvider,
+    HarnessProvider,
+    IdentityProvider,
     MemoryProvider,
-    ModelProvider,
+    PlanModeProvider,
+    SessionGuidanceProvider,
     SkillProvider,
-    WorkspaceProvider,
+    TextProvider,
+    _TemplateProvider,
     build_prompt,
+    build_prompt_context,
+    default_instruction_providers,
     default_prompt_providers,
 )
+from wy_coding_agent.reminders import HarnessState
 from wy_coding_agent.skills import Skill
 
 
-class _StaticProvider(BasePromptProvider):
-    def __init__(self, section: str | None) -> None:
-        self._section = section
-
-    def provide(self) -> str | None:
-        return self._section
-
-
-def test_build_prompt_strips_instruction() -> None:
-    assert build_prompt("  be brief  ") == "be brief"
+def test_text_provider_strips() -> None:
+    assert TextProvider("  be brief  ").provide() == "be brief"
+    assert TextProvider("   ").provide() is None
 
 
 def test_build_prompt_empty_returns_none() -> None:
-    assert build_prompt(None) is None
-    assert build_prompt("   ") is None
-    assert build_prompt(None, (_StaticProvider(None), _StaticProvider("  "))) is None
+    assert build_prompt() is None
+    assert build_prompt((TextProvider(""), TextProvider("  "))) is None
 
 
 def test_build_prompt_composes_sections_in_order() -> None:
     providers = (
-        _StaticProvider("# One\n\nfirst"),
-        _StaticProvider(None),
-        _StaticProvider("# Two\n\nsecond"),
+        TextProvider("be brief"),
+        TextProvider("# One\n\nfirst"),
+        TextProvider(""),
+        TextProvider("# Two\n\nsecond"),
     )
-    assert build_prompt("be brief", providers) == (
+    assert build_prompt(providers) == (
         "be brief\n\n# One\n\nfirst\n\n# Two\n\nsecond"
     )
 
 
-def test_model_provider() -> None:
-    assert ModelProvider("model-x").provide() == (
-        "# Model\n\nYou are powered by the model `model-x`."
-    )
-    assert ModelProvider("   ").provide() is None
-
-
-def test_workspace_provider(tmp_path: Path) -> None:
-    section = WorkspaceProvider(tmp_path).provide()
-    assert section is not None
-    assert section.startswith("# Workspace")
-    assert f"- Working directory: {tmp_path}" in section
-    assert "- Is a git repository: no" in section
+def test_build_prompt_context(tmp_path: Path) -> None:
+    ctx = build_prompt_context("model-x", tmp_path)
+    assert ctx.workspace == tmp_path
+    assert ctx.model == "model-x"
+    assert ctx.is_git is False
+    assert ctx.platform == platform.system()
+    assert ctx.date == date.today()
 
     (tmp_path / ".git").mkdir()
-    assert "- Is a git repository: yes" in WorkspaceProvider(tmp_path).provide()
+    assert build_prompt_context("model-x", tmp_path).is_git is True
+
+
+def test_environment_provider_renders_placeholders(tmp_path: Path) -> None:
+    ctx = build_prompt_context("model-x", tmp_path)
+    section = EnvironmentProvider(ctx).provide()
+    assert section is not None
+    assert section.startswith("# Environment")
+    assert f"- Working directory: {tmp_path}" in section
+    assert "- Is a git repository: no" in section
+    assert f"- Platform: {platform.system()}" in section
+    assert f"- Today's date: {date.today().isoformat()}" in section
+    assert "- Model: model-x" in section
+
+
+def test_template_providers_return_content(tmp_path: Path) -> None:
+    ctx = build_prompt_context("model-x", tmp_path)
+    assert IdentityProvider(ctx).provide().startswith("You are")
+    assert HarnessProvider(ctx).provide().startswith("# Harness")
+    assert SessionGuidanceProvider(ctx).provide().startswith(
+        "# Session-specific guidance"
+    )
+    assert ContextManagementProvider(ctx).provide().startswith("# Context management")
+
+
+def test_template_provider_unknown_placeholder_falls_back(tmp_path: Path) -> None:
+    ctx = build_prompt_context("model-x", tmp_path)
+
+    class _BrokenTemplate(_TemplateProvider):
+        _TEMPLATE = "{missing} text"
+
+    assert _BrokenTemplate(ctx).provide() == "{missing} text"
+
+
+def test_default_instruction_providers_order(tmp_path: Path) -> None:
+    providers = default_instruction_providers(build_prompt_context("model-x", tmp_path))
+    assert [type(provider) for provider in providers] == [
+        IdentityProvider,
+        HarnessProvider,
+        SessionGuidanceProvider,
+        EnvironmentProvider,
+        ContextManagementProvider,
+    ]
+
+
+def test_build_prompt_orders_template_before_custom(tmp_path: Path) -> None:
+    ctx = build_prompt_context("model-x", tmp_path)
+    prompt = build_prompt((IdentityProvider(ctx), TextProvider("custom")))
+    assert prompt is not None
+    assert prompt.startswith("You are")
+    assert prompt.endswith("\n\ncustom")
 
 
 def test_agent_md_provider_prefers_agents_md(tmp_path: Path) -> None:
@@ -126,13 +173,40 @@ def test_deferred_tool_provider() -> None:
     assert "- mcp__demo__boom" in section
 
 
-def test_default_prompt_providers_order(tmp_path: Path) -> None:
-    providers = default_prompt_providers("model-x", tmp_path)
+def test_default_prompt_providers_order() -> None:
+    providers = default_prompt_providers()
     assert [type(provider) for provider in providers] == [
-        ModelProvider,
-        WorkspaceProvider,
-        AgentMDProvider,
         SkillProvider,
         DeferredToolProvider,
-        MemoryProvider,
     ]
+
+
+def test_plan_mode_provider() -> None:
+    section = PlanModeProvider().provide()
+    assert section is not None
+    assert section.startswith("# Plan mode")
+    assert "exit_plan_mode" in section
+    for heading in (
+        "# Skills",
+        "# Deferred tools",
+        "# Memory",
+        "# Project instructions",
+        "# currentDate",
+    ):
+        assert heading not in section
+
+
+def test_build_prompt_harness_plan_active() -> None:
+    harness = HarnessState()
+    base = build_prompt((TextProvider("hello"),))
+    assert base == "hello"
+    # plan 未激活或 harness=None 时不含 plan 段
+    assert build_prompt((TextProvider("hello"),), harness=harness) == "hello"
+    assert build_prompt((TextProvider("hello"),), harness=None) == "hello"
+
+    harness.enable_plan()
+    prompt = build_prompt((TextProvider("hello"),), harness=harness)
+    assert prompt is not None
+    assert prompt.startswith("hello")
+    assert "# Plan mode" in prompt
+    assert "exit_plan_mode" in prompt

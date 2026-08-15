@@ -28,7 +28,7 @@ from wy_core import (
     Usage,
 )
 
-from wy_coding_agent.reminders import PlanModeState
+from wy_coding_agent.reminders import HarnessState
 from wy_coding_agent.session import SessionRecord
 from wy_coding_agent.tui.approval import TuiApprovalHandler
 from wy_coding_agent.tui.choice import Choice, ChoiceResult, ChoiceWidget
@@ -36,9 +36,11 @@ import wy_coding_agent.tui.render as render
 
 
 class ChatBackend(Protocol):
-    plan_mode: PlanModeState | None
+    plan_mode: HarnessState | None
 
     def stream(self, user_input: str) -> AsyncIterator[AgentEvent]: ...
+
+    def set_plan_mode(self, active: bool) -> None: ...
 
     def save_state(self) -> None: ...
 
@@ -578,10 +580,7 @@ class ChatApp(App[None]):
         if plan_mode is None:
             await self._mount_view(render.error_view("当前后端不支持 plan 模式"))
             return ""
-        plan_mode.enable()
-        saver = getattr(self.chat, "save_state", None)
-        if callable(saver):
-            saver()  # 回合外的模式切换即时落盘,重启后仍处于 plan 模式
+        self.chat.set_plan_mode(True)  # 翻转 harness 状态并即时落盘;system 由提交时组装
         await self._mount_view(render.PLAN_MODE_VIEW)
         self._refresh_hints()
         return command[len("/plan"):].strip()
@@ -620,5 +619,5 @@ class ChatApp(App[None]):
     def _refresh_hints(self) -> None:
         plan_mode = getattr(self.chat, "plan_mode", None)
         self._status.update(
-            render.hint_text(plan_mode is not None and plan_mode.active)
+            render.hint_text(plan_mode is not None and plan_mode.plan_active)
         )
